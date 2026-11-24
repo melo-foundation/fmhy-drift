@@ -489,3 +489,74 @@ def test_cli_incremental_reuse_report_preserves_github_and_sites(tmp_path: Path)
     assert result["summary"]["unique_sites_checked"] == 42
     assert result["entries"][0]["sites"][0]["inactive_days"] == 693
     assert result["entries"][0]["github_repos"][0]["vulns"][0]["vuln_id"] == "CVE-2025-0001"
+
+
+@pytest.mark.anyio
+async def test_gitlab_subgroup_gitea_cross_fallback_and_pagure_html_guard() -> None:
+    # 1. Cwtch (`git.openprivacy.ca`) is now extracted directly as `forgejo`!
+    cwtch_ref = extract_alt_forge_repo("https://git.openprivacy.ca/cwtch.im/cwtch")
+    assert cwtch_ref is not None and cwtch_ref.forge == "forgejo"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        u = str(request.url)
+        # GitLab GraphQL returns null project for subgroup `videostreaming/plugins`
+        if "gitlab.futo.org/api/graphql" in u:
+            return httpx.Response(200, json={"data": {"p0": None}})
+        if "gitlab.futo.org/api/v4/projects/videostreaming%2fplugins" in u.lower():
+            return httpx.Response(404, json={"message": "404 Project Not Found"})
+        if "gitlab.futo.org/api/v4/groups/videostreaming%2fplugins/projects" in u.lower():
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 316,
+                        "path_with_namespace": "videostreaming/plugins/crunchyroll",
+                        "archived": False,
+                        "last_activity_at": "2026-11-20T00:00:00Z",
+                    }
+                ],
+            )
+
+        # Self-hosted server misclassified as GitLab returns HTML 404 on `/api/v4/`, JSON 200 on `/api/v1/`
+        if "misclassified.example.org/api/graphql" in u:
+            return httpx.Response(404, text="<html>Not Found</html>", headers={"content-type": "text/html"})
+        if "misclassified.example.org/api/v4/projects/" in u:
+            return httpx.Response(404, text="<html>Not Found</html>", headers={"content-type": "text/html"})
+        if "misclassified.example.org/api/v1/repos/cwtch.im/cwtch" in u and "/commits" not in u and "/releases" not in u:
+            return httpx.Response(
+                200,
+                json={
+                    "full_name": "cwtch.im/cwtch",
+                    "html_url": "https://misclassified.example.org/cwtch.im/cwtch",
+                    "archived": False,
+                    "empty": False,
+                    "updated_at": "2026-11-18T00:00:00Z",
+                },
+            )
+        if "misclassified.example.org/api/v1/repos/cwtch.im/cwtch/" in u:
+            return httpx.Response(200, json=[])
+
+        # Pagure `/api/0/` disabled (HTML 404) while web repo page is 200 OK
+        if "pagure.io/api/0/JShelter/webextension" in u:
+            return httpx.Response(404, text="<!DOCTYPE HTML><html>Not Found</html>", headers={"content-type": "text/html"})
+        if u == "https://pagure.io/JShelter/webextension/":
+            return httpx.Response(200, text="<html>Updated 2026-10-15</html>", headers={"content-type": "text/html"})
+
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    checker = AltForgeActivityChecker(
+        thresholds=TierThresholds(90, 180, 365),
+        now=FIXED_NOW,
+        transport=httpx.MockTransport(handler),
+    )
+    res = await checker.check_repos(
+        [
+            GitHubRef("videostreaming", "plugins", "explicit_markdown", forge="gitlab", forge_host="gitlab.futo.org"),
+            GitHubRef("cwtch.im", "cwtch", "explicit_markdown", forge="gitlab", forge_host="misclassified.example.org"),
+            GitHubRef("JShelter", "webextension", "explicit_markdown", forge="pagure", forge_host="pagure.io"),
+        ]
+    )
+    assert res["gitlab.futo.org/videostreaming/plugins"].tier == StalenessTier.ACTIVE
+    assert res["gitlab.futo.org/videostreaming/plugins"].inactive_days == 5
+    assert res["misclassified.example.org/cwtch.im/cwtch"].tier == StalenessTier.ACTIVE
+    assert res["pagure.io/jshelter/webextension"].tier == StalenessTier.ACTIVE

@@ -211,7 +211,6 @@ GITLAB_HOSTS = frozenset(
         "gitgud.io",
         "code.briarproject.org",
         "git.jami.net",
-        "git.openprivacy.ca",
         "i2pgit.org",
     }
 )
@@ -267,6 +266,7 @@ FORGEJO_GITEA_HOSTS = frozenset(
         "git.sdf.org",
         "source.mapcomplete.org",
         "git.hostux.net",
+        "git.openprivacy.ca",
         "git.private.coffee",
         "git.lolcat.ca",
     }

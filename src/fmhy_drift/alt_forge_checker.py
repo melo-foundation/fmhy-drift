@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import json
 import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -81,6 +82,33 @@ def _parse_any_datetime(value: str | int | float | None) -> datetime | None:
     return None
 
 
+def _is_json_response(resp: httpx.Response) -> bool:
+    ct = (resp.headers.get("content-type") or "").lower()
+    if "json" in ct:
+        return True
+    body = resp.text.lstrip()[:2]
+    return body.startswith(("{", "["))
+
+
+def _build_gitlab_graphql_batch(batch: list[GitHubRef]) -> str:
+    parts: list[str] = []
+    for idx, r in enumerate(batch):
+        fp = json.dumps(f"{r.owner}/{r.repo}", ensure_ascii=False)
+        parts.append(
+            f"""
+  p{idx}: project(fullPath: {fp}) {{
+    fullPath
+    webUrl
+    archived
+    description
+    lastActivityAt
+    repository {{ empty }}
+    releases(first: 1, sort: RELEASED_AT_DESC) {{ nodes {{ tagName releasedAt }} }}
+  }}"""
+        )
+    return "query {" + "".join(parts) + "\n}"
+
+
 class AltForgeActivityChecker:
     """Evaluates repository activity, archival, and replacements across non-GitHub forges."""
 
@@ -88,8 +116,8 @@ class AltForgeActivityChecker:
         self,
         *,
         thresholds: TierThresholds | None = None,
-        concurrency: int = 12,
-        per_host_concurrency: int = 4,
+        concurrency: int = 10,
+        per_host_concurrency: int = 2,
         timeout: float = 18.0,
         now: datetime | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -136,15 +164,124 @@ class AltForgeActivityChecker:
         results: dict[str, RepoActivityResult] = {}
 
         async with httpx.AsyncClient(**client_kwargs) as client:
+            # 1. Batch-check GitLab hosts via `/api/graphql` first (avoids REST 429s on gitlab.com!)
+            gl_by_host: dict[str, list[GitHubRef]] = defaultdict(list)
+            non_gl_refs: list[GitHubRef] = []
+            for r in unique_refs:
+                if r.forge == "gitlab":
+                    gl_by_host[r.forge_host].append(r)
+                else:
+                    non_gl_refs.append(r)
+
+            gl_fallbacks: list[GitHubRef] = []
+            for host, host_refs in gl_by_host.items():
+                unresolved = await self._check_gitlab_graphql_host(
+                    client, host, host_refs, results
+                )
+                gl_fallbacks.extend(unresolved)
+
+            remaining = non_gl_refs + gl_fallbacks
 
             async def _worker(ref: GitHubRef) -> None:
                 async with global_sem, host_sems[ref.forge_host]:
                     results[ref.key] = await self._check_one(client, ref)
 
-            await asyncio.gather(*(_worker(r) for r in unique_refs))
+            await asyncio.gather(*(_worker(r) for r in remaining))
             await self._enrich_missing_wayback(client, results)
 
         return results
+
+    async def _check_gitlab_graphql_host(
+        self,
+        client: httpx.AsyncClient,
+        host: str,
+        host_refs: list[GitHubRef],
+        results: dict[str, RepoActivityResult],
+    ) -> list[GitHubRef]:
+        """Batch-query up to 25 GitLab projects per GraphQL request; return unresolved refs for REST/group fallback."""
+        unresolved: list[GitHubRef] = []
+        gql_url = f"https://{host}/api/graphql"
+        for start in range(0, len(host_refs), 25):
+            batch = host_refs[start : start + 25]
+            query = _build_gitlab_graphql_batch(batch)
+            try:
+                resp = await client.post(gql_url, json={"query": query})
+                if resp.status_code != 200 or not _is_json_response(resp):
+                    unresolved.extend(batch)
+                    continue
+                payload = resp.json()
+                data = payload.get("data") if isinstance(payload, dict) else None
+                if not isinstance(data, dict):
+                    unresolved.extend(batch)
+                    continue
+            except Exception:
+                unresolved.extend(batch)
+                continue
+
+            for idx, ref in enumerate(batch):
+                node = data.get(f"p{idx}")
+                if not isinstance(node, dict):
+                    # Could be a GitLab Group/Subgroup (e.g. `videostreaming/plugins`), renamed repo, or Pages site
+                    unresolved.append(ref)
+                    continue
+
+                path_ns = node.get("fullPath") or f"{ref.owner}/{ref.repo}"
+                canon_full = f"{host}/{path_ns}"
+                web_url = node.get("webUrl") or f"https://{canon_full}"
+                is_archived = bool(node.get("archived"))
+                repo_info = node.get("repository") if isinstance(node.get("repository"), dict) else {}
+                is_empty = bool(repo_info.get("empty"))
+                description = (node.get("description") or "").strip()
+
+                release_dt: datetime | None = None
+                release_tag: str | None = None
+                rels = node.get("releases")
+                if isinstance(rels, dict):
+                    rnodes = rels.get("nodes")
+                    if isinstance(rnodes, list) and rnodes and isinstance(rnodes[0], dict):
+                        release_dt = _parse_any_datetime(rnodes[0].get("releasedAt"))
+                        release_tag = rnodes[0].get("tagName")
+
+                act_dt = _parse_any_datetime(node.get("lastActivityAt"))
+                latest_ts = None if is_empty else _latest_activity([act_dt, release_dt])
+
+                repl_url: str | None = None
+                if is_archived:
+                    ns_parts = path_ns.rsplit("/", 1)
+                    eff_o = ns_parts[0] if len(ns_parts) == 2 else ref.owner
+                    eff_r = ns_parts[-1]
+                    repl_url = find_archived_replacement_url(
+                        owner=eff_o,
+                        repo=eff_r,
+                        canonical_full_name=None,
+                        description=description,
+                        homepage_url=None,
+                        readme_text=None,
+                    )
+
+                res = _evaluate_repo_state(
+                    owner=ref.owner,
+                    repo=ref.repo,
+                    canonical_full_name=None,
+                    is_archived=is_archived,
+                    is_disabled=False,
+                    archived_at=None,
+                    last_activity_at=latest_ts,
+                    latest_release_tag=release_tag,
+                    homepage_url=None,
+                    description=description,
+                    thresholds=self.thresholds,
+                    now=self.now,
+                )
+                results[ref.key] = self._finalize(
+                    ref,
+                    res,
+                    canonical_full_name=canon_full,
+                    canonical_html_url=web_url,
+                    replacement_url=repl_url,
+                )
+
+        return unresolved
 
     async def _check_one(self, client: httpx.AsyncClient, ref: GitHubRef) -> RepoActivityResult:
         try:
@@ -256,24 +393,98 @@ class AltForgeActivityChecker:
         encoded = quote(proj_path, safe="")
         base_api = f"https://{ref.forge_host}/api/v4/projects/{encoded}"
         resp = await client.get(base_api)
+        if resp.status_code == 429:
+            await asyncio.sleep(2.0)
+            resp = await client.get(base_api)
 
-        if resp.status_code == 404 and allow_pages_fallback and ref.source == "forge_pages":
-            for cand_repo in (f"{ref.owner}.gitlab.io", ref.owner):
-                if cand_repo.lower() == ref.repo.lower():
-                    continue
-                alt_ref = replace(ref, repo=cand_repo)
-                sub = await self._check_gitlab(client, alt_ref, allow_pages_fallback=False)
-                if sub.tier != StalenessTier.MISSING:
-                    return replace(sub, owner=ref.owner, repo=ref.repo)
-            if await self._check_pages_url_alive(ref.discovered_from_url, ".gitlab.io"):
-                return RepoActivityResult(
-                    owner=ref.owner,
-                    repo=ref.repo,
-                    tier=StalenessTier.ACTIVE,
-                    reason="GitLab Pages site is live (backed by private GitLab repository)",
-                    forge=ref.forge,
-                    forge_host=ref.forge_host,
+        if resp.status_code == 404:
+            # 1. If server returned HTML 404 instead of GitLab JSON, cross-probe Gitea/Forgejo `/api/v1/repos/`!
+            if not _is_json_response(resp):
+                fj = await self._check_forgejo(
+                    client,
+                    replace(ref, forge="forgejo"),
+                    allow_pages_fallback=False,
+                    allow_cross_fallback=False,
                 )
+                if fj.tier != StalenessTier.MISSING:
+                    return fj
+                if await self._web_repo_page_alive(client, f"https://{ref.forge_host}/{proj_path}"):
+                    return RepoActivityResult(
+                        owner=ref.owner,
+                        repo=ref.repo,
+                        tier=StalenessTier.ERROR,
+                        reason=f"{ref.forge_host} JSON API unavailable (web repository is live)",
+                        forge=ref.forge,
+                        forge_host=ref.forge_host,
+                    )
+
+            # 2. Check if path is actually a GitLab Group / Subgroup (e.g. `gitlab.futo.org/videostreaming/plugins`)!
+            grp_resp = await client.get(
+                f"https://{ref.forge_host}/api/v4/groups/{encoded}/projects",
+                params={
+                    "include_subgroups": "true",
+                    "order_by": "last_activity_at",
+                    "sort": "desc",
+                    "per_page": "10",
+                },
+            )
+            if grp_resp.status_code == 200 and _is_json_response(grp_resp):
+                grp_projects = grp_resp.json()
+                if isinstance(grp_projects, list) and grp_projects:
+                    active_dates = [
+                        _parse_any_datetime(p.get("last_activity_at") or p.get("created_at"))
+                        for p in grp_projects
+                        if isinstance(p, dict) and not p.get("archived")
+                    ]
+                    all_dates = [
+                        _parse_any_datetime(p.get("last_activity_at") or p.get("created_at"))
+                        for p in grp_projects
+                        if isinstance(p, dict)
+                    ]
+                    all_archived = all(
+                        bool(p.get("archived")) for p in grp_projects if isinstance(p, dict)
+                    )
+                    latest_grp_ts = _latest_activity(active_dates or all_dates)
+                    canon_grp = f"{ref.forge_host}/{proj_path}"
+                    res = _evaluate_repo_state(
+                        owner=ref.owner,
+                        repo=ref.repo,
+                        canonical_full_name=None,
+                        is_archived=all_archived,
+                        is_disabled=False,
+                        archived_at=None,
+                        last_activity_at=latest_grp_ts,
+                        latest_release_tag=None,
+                        homepage_url=None,
+                        description=f"GitLab group ({len(grp_projects)}+ repositories)",
+                        thresholds=self.thresholds,
+                        now=self.now,
+                    )
+                    return self._finalize(
+                        ref,
+                        res,
+                        canonical_full_name=canon_grp,
+                        canonical_html_url=f"https://{canon_grp}",
+                    )
+
+            # 3. GitLab Pages fallback (`*.gitlab.io`)
+            if allow_pages_fallback and ref.source == "forge_pages":
+                for cand_repo in (f"{ref.owner}.gitlab.io", ref.owner):
+                    if cand_repo.lower() == ref.repo.lower():
+                        continue
+                    alt_ref = replace(ref, repo=cand_repo)
+                    sub = await self._check_gitlab(client, alt_ref, allow_pages_fallback=False)
+                    if sub.tier != StalenessTier.MISSING:
+                        return replace(sub, owner=ref.owner, repo=ref.repo)
+                if await self._check_pages_url_alive(ref.discovered_from_url, ".gitlab.io"):
+                    return RepoActivityResult(
+                        owner=ref.owner,
+                        repo=ref.repo,
+                        tier=StalenessTier.ACTIVE,
+                        reason="GitLab Pages site is live (backed by private GitLab repository)",
+                        forge=ref.forge,
+                        forge_host=ref.forge_host,
+                    )
 
         if resp.status_code in {404, 410}:
             return RepoActivityResult(
@@ -293,12 +504,12 @@ class AltForgeActivityChecker:
                 forge=ref.forge,
                 forge_host=ref.forge_host,
             )
-        if resp.status_code != 200:
+        if resp.status_code != 200 or not _is_json_response(resp):
             return RepoActivityResult(
                 owner=ref.owner,
                 repo=ref.repo,
                 tier=StalenessTier.ERROR,
-                reason=f"{ref.forge_host} HTTP {resp.status_code}",
+                reason=f"{ref.forge_host} HTTP {resp.status_code} (API unavailable or rate-limited)",
                 forge=ref.forge,
                 forge_host=ref.forge_host,
             )
@@ -398,15 +609,50 @@ class AltForgeActivityChecker:
             replacement_url=repl_url,
         )
 
+    async def _web_repo_page_alive(self, client: httpx.AsyncClient, url: str) -> bool:
+        """Verify whether the forge repository HTML page itself responds 200 OK (guarding against disabled JSON APIs)."""
+        try:
+            r = await client.head(url, timeout=8.0)
+            if r.status_code == 200:
+                return True
+            if r.status_code in {403, 405}:
+                r2 = await client.get(url, timeout=8.0)
+                return r2.status_code == 200
+        except Exception:
+            pass
+        return False
+
     async def _check_forgejo(
         self,
         client: httpx.AsyncClient,
         ref: GitHubRef,
         *,
         allow_pages_fallback: bool = True,
+        allow_cross_fallback: bool = True,
     ) -> RepoActivityResult:
         api_base = f"https://{ref.forge_host}/api/v1/repos/{ref.owner}/{ref.repo}"
         resp = await client.get(api_base)
+
+        if resp.status_code == 404 and not _is_json_response(resp):
+            if allow_cross_fallback:
+                gl = await self._check_gitlab(
+                    client,
+                    replace(ref, forge="gitlab"),
+                    allow_pages_fallback=False,
+                )
+                if gl.tier != StalenessTier.MISSING:
+                    return gl
+            if await self._web_repo_page_alive(
+                client, f"https://{ref.forge_host}/{ref.owner}/{ref.repo}"
+            ):
+                return RepoActivityResult(
+                    owner=ref.owner,
+                    repo=ref.repo,
+                    tier=StalenessTier.ERROR,
+                    reason=f"{ref.forge_host} JSON API unavailable (web repository is live)",
+                    forge=ref.forge,
+                    forge_host=ref.forge_host,
+                )
 
         if resp.status_code == 404 and allow_pages_fallback and ref.source == "forge_pages":
             for cand_repo in ("pages", ref.owner):
@@ -444,12 +690,12 @@ class AltForgeActivityChecker:
                 forge=ref.forge,
                 forge_host=ref.forge_host,
             )
-        if resp.status_code != 200:
+        if resp.status_code != 200 or not _is_json_response(resp):
             return RepoActivityResult(
                 owner=ref.owner,
                 repo=ref.repo,
                 tier=StalenessTier.ERROR,
-                reason=f"{ref.forge_host} HTTP {resp.status_code}",
+                reason=f"{ref.forge_host} HTTP {resp.status_code} (API unavailable or challenge)",
                 forge=ref.forge,
                 forge_host=ref.forge_host,
             )
@@ -737,6 +983,49 @@ class AltForgeActivityChecker:
         slug = ref.repo if ref.owner == "_" else f"{ref.owner}/{ref.repo}"
         resp = await client.get(f"https://pagure.io/api/0/{slug}")
         if resp.status_code == 404:
+            if not _is_json_response(resp):
+                # Pagure static archive / disabled `/api/0/` endpoint: verify web page & commits HTML
+                page_url = f"https://pagure.io/{slug}/"
+                page_resp = await client.get(page_url)
+                if page_resp.status_code == 200:
+                    # Extract latest ISO timestamp from Pagure HTML (`title="2025-..."` or `datetime="..."`)
+                    iso_matches = re.findall(r"\b(20\d{2}-\d{2}-\d{2})\b", page_resp.text)
+                    valid_dts = [
+                        d
+                        for m in iso_matches
+                        if (d := _parse_any_datetime(m)) is not None and d <= self.now
+                    ]
+                    latest_html_ts = max(valid_dts) if valid_dts else None
+                    canon_full = f"pagure.io/{slug}"
+                    if latest_html_ts is not None:
+                        res = _evaluate_repo_state(
+                            owner=ref.owner,
+                            repo=ref.repo,
+                            canonical_full_name=None,
+                            is_archived=False,
+                            is_disabled=False,
+                            archived_at=None,
+                            last_activity_at=latest_html_ts,
+                            latest_release_tag=None,
+                            homepage_url=None,
+                            description="",
+                            thresholds=self.thresholds,
+                            now=self.now,
+                        )
+                        return self._finalize(
+                            ref,
+                            res,
+                            canonical_full_name=canon_full,
+                            canonical_html_url=page_url,
+                        )
+                    return RepoActivityResult(
+                        owner=ref.owner,
+                        repo=ref.repo,
+                        tier=StalenessTier.ERROR,
+                        reason="Pagure API disabled (web repository is live)",
+                        forge=ref.forge,
+                        forge_host=ref.forge_host,
+                    )
             return RepoActivityResult(
                 owner=ref.owner,
                 repo=ref.repo,
@@ -745,7 +1034,7 @@ class AltForgeActivityChecker:
                 forge=ref.forge,
                 forge_host=ref.forge_host,
             )
-        if resp.status_code != 200:
+        if resp.status_code != 200 or not _is_json_response(resp):
             return RepoActivityResult(
                 owner=ref.owner,
                 repo=ref.repo,
