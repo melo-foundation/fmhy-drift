@@ -6,6 +6,7 @@ on:
       - main
     paths-ignore:
       - "README.md"
+      - "whitelist.json"
   schedule:
     # Weekly every Monday at 06:00 UTC
     - cron: "0 6 * * 1"
@@ -49,12 +50,21 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   drift-check:
     name: FMHY Drift & GitHub Staleness Audit
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy_pages.outputs.page_url }}
 
     steps:
       - name: Checkout repository
@@ -84,12 +94,12 @@ jobs:
           if [ "${{ inputs.starred_only }}" = "true" ]; then
             EXTRA_ARGS+=(--starred-only)
           fi
-          # Note: If PROXY_URL is unset, --skip-without-proxy guarantees site liveness
-          # never runs from the GitHub runner IP while still running the GitHub API check.
           uv run fmhy-drift \
             --skip-without-proxy \
+            --whitelist whitelist.json \
             --markdown-out reports/fmhy-drift-report.md \
             --json-out reports/fmhy-drift-report.json \
+            --html-out reports/index.html \
             "${EXTRA_ARGS[@]}"
 
       - name: Upload Markdown and JSON drift reports
@@ -100,5 +110,15 @@ jobs:
           path: |
             reports/fmhy-drift-report.md
             reports/fmhy-drift-report.json
+            reports/index.html
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Upload GitHub Pages triage site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports
+
+      - name: Deploy Triage UI to GitHub Pages
+        id: deploy_pages
+        uses: actions/deploy-pages@v4

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,12 +32,15 @@ from fmhy_drift.proxy_guard import (
     verify_proxy_egress,
 )
 from fmhy_drift.reporter import (
+    github_pages_url_from_env,
     render_json_report,
     render_markdown_report,
     send_discord_webhook,
     summarize_report,
 )
 from fmhy_drift.site_checker import SiteChecker, filter_discovered_for_entry
+from fmhy_drift.triage_ui import TRIAGE_HTML
+from fmhy_drift.whitelist import load_whitelist
 
 
 def _env_int(name: str, default: int) -> int:
@@ -56,7 +60,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="fmhy-drift",
         description=(
             "Check FMHY index sites for liveness (strictly via proxy, never direct runner IP) "
-            "and/or audit linked GitHub repositories for inactivity."
+            "and/or audit linked GitHub repositories for inactivity, archival, and replacements."
         ),
     )
     parser.add_argument(
@@ -77,6 +81,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "If no proxy URL is provided, skip site liveness checks instead of failing "
             "and run only the GitHub repository activity checks."
         ),
+    )
+    parser.add_argument(
+        "--whitelist",
+        type=Path,
+        default=Path("whitelist.json"),
+        help="Path to whitelist.json for ignoring known-good archived/stable repos and URLs.",
     )
     parser.add_argument(
         "--input",
@@ -126,7 +136,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--discover-github",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Auto-discover linked GitHub repositories on live site homepages when site checks run (default: enabled).",
+        help="Auto-discover linked GitHub repositories on live site homepages when site checks run.",
     )
     parser.add_argument(
         "--include-social",
@@ -141,7 +151,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--starred-only",
         action="store_true",
-        help="Only check ⭐ recommended entries (useful if reducing noise).",
+        help="Only check ⭐ recommended entries.",
     )
     parser.add_argument(
         "--max-entries",
@@ -174,9 +184,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Output path for the JSON report (default: reports/fmhy-drift-report.json).",
     )
     parser.add_argument(
+        "--html-out",
+        type=Path,
+        default=Path("reports/index.html"),
+        help="Output path for the interactive Triage & Discord Report Builder HTML UI.",
+    )
+    parser.add_argument(
         "--discord-webhook",
         default=os.environ.get("DISCORD_WEBHOOK_URL", ""),
-        help="Optional Discord webhook URL to post summary embed + Markdown report attachment.",
+        help="Optional Discord webhook URL to post run summary embed.",
     )
     return parser
 
@@ -214,7 +230,7 @@ def _write_github_step_summary(markdown_text: str) -> None:
     encoded = markdown_text.encode("utf-8")
     if len(encoded) > 950_000:
         truncated = encoded[:900_000].decode("utf-8", errors="ignore")
-        truncated += "\n\n> _Truncated in Step Summary; download full `fmhy-drift-report.md` artifact._\n"
+        truncated += "\n\n> _Truncated in Step Summary; open the Triage UI or download `fmhy-drift-report.md` artifact._\n"
         path.write_text(truncated, encoding="utf-8")
     else:
         path.write_text(markdown_text, encoding="utf-8")
@@ -226,6 +242,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         tier2_days=args.warn_days_2,
         tier3_days=args.warn_days_3,
     )
+    whitelist = load_whitelist(args.whitelist)
 
     run_site_checks = not args.github_only
     proxy_url: str | None = None
@@ -290,16 +307,19 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         max_entries=args.max_entries,
     )
 
-    # 3. Optional site liveness checks (strictly via verified proxy)
+    # 3. Optional site liveness checks (strictly via verified proxy, skipping whitelisted URLs)
     site_results_map: dict[str, SiteCheckResult] = {}
     unique_site_count = 0
+    whitelisted_sites_skipped = 0
 
     if run_site_checks and proxy_url is not None:
-        all_site_urls = [u for e in entries for u in e.site_urls]
-        unique_site_count = len(dict.fromkeys(all_site_urls))
+        raw_urls = list(dict.fromkeys(u for e in entries for u in e.site_urls))
+        urls_to_check = [u for u in raw_urls if not whitelist.is_url_whitelisted(u)]
+        whitelisted_sites_skipped = len(raw_urls) - len(urls_to_check)
+        unique_site_count = len(urls_to_check)
         print(
-            f"Loaded {len(entries)} FMHY entries ({unique_site_count} unique site URLs). "
-            "Running liveness checks via proxy...",
+            f"Loaded {len(entries)} FMHY entries ({unique_site_count} unique site URLs, "
+            f"{whitelisted_sites_skipped} whitelisted). Running liveness checks via proxy...",
             flush=True,
         )
         site_checker = SiteChecker(
@@ -308,29 +328,35 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             timeout=args.timeout,
             discover_github=args.discover_github,
         )
-        site_results_map = await site_checker.check_urls(all_site_urls)
+        site_results_map = await site_checker.check_urls(urls_to_check)
     else:
         print(f"Loaded {len(entries)} FMHY entries with linked GitHub repositories.", flush=True)
 
-    # 4. Merge explicit FMHY GitHub refs + any homepage auto-discovered GitHub refs
+    # 4. Merge explicit FMHY GitHub refs + homepage auto-discovered refs, excluding whitelisted repos
     entry_all_refs: list[list[GitHubRef]] = []
     combined_refs_for_api: list[GitHubRef] = []
+    whitelisted_repo_keys_seen: set[str] = set()
 
     for entry in entries:
-        merged: list[GitHubRef] = list(entry.github_refs)
-        seen_keys = {r.key for r in merged}
+        merged: list[GitHubRef] = []
+        seen_keys: set[str] = set()
 
+        candidates_for_entry = list(entry.github_refs)
         if run_site_checks and args.discover_github:
             raw_candidates: list[GitHubRef] = []
             for u in entry.site_urls:
                 sr = site_results_map.get(u)
                 if sr and sr.discovered_githubs:
                     raw_candidates.extend(sr.discovered_githubs)
-            filtered_discovered = filter_discovered_for_entry(entry, raw_candidates)
-            for cand in filtered_discovered:
-                if cand.key not in seen_keys:
-                    seen_keys.add(cand.key)
-                    merged.append(cand)
+            candidates_for_entry.extend(filter_discovered_for_entry(entry, raw_candidates))
+
+        for cand in candidates_for_entry:
+            if whitelist.is_repo_whitelisted(cand.owner, cand.repo):
+                whitelisted_repo_keys_seen.add(cand.key)
+                continue
+            if cand.key not in seen_keys:
+                seen_keys.add(cand.key)
+                merged.append(cand)
 
         entry_all_refs.append(merged)
         combined_refs_for_api.extend(merged)
@@ -338,11 +364,12 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     unique_repo_count = len({r.key for r in combined_refs_for_api})
     print(
         f"Checking activity across {unique_repo_count} unique GitHub repositories "
-        f"(thresholds: {thresholds.tier1_days}d / {thresholds.tier2_days}d / {thresholds.tier3_days}d)...",
+        f"({len(whitelisted_repo_keys_seen)} whitelisted skipped; "
+        f"thresholds: {thresholds.tier1_days}d / {thresholds.tier2_days}d / {thresholds.tier3_days}d)...",
         flush=True,
     )
 
-    # 5. Check GitHub activity & archival status
+    # 5. Check GitHub activity, archival status, and archived replacement links
     gh_checker = GitHubActivityChecker(
         thresholds=thresholds,
         github_token=args.github_token or None,
@@ -376,9 +403,12 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         entries=entry_results,
         unique_sites_checked=unique_site_count,
         unique_repos_checked=unique_repo_count,
+        whitelisted_repos_skipped=len(whitelisted_repo_keys_seen),
+        whitelisted_sites_skipped=whitelisted_sites_skipped,
     )
 
-    markdown_text = render_markdown_report(report)
+    pages_url = github_pages_url_from_env()
+    markdown_text = render_markdown_report(report, pages_url=pages_url)
     json_text = render_json_report(report)
 
     args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
@@ -387,29 +417,36 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json_text, encoding="utf-8")
 
+    args.html_out.parent.mkdir(parents=True, exist_ok=True)
+    args.html_out.write_text(TRIAGE_HTML, encoding="utf-8")
+
+    # Copy whitelist.json alongside index.html so static GitHub Pages bundle has a local fallback
+    wl_dest = args.html_out.parent / "whitelist.json"
+    if args.whitelist and args.whitelist.is_file() and args.whitelist.resolve() != wl_dest.resolve():
+        shutil.copyfile(args.whitelist, wl_dest)
+    elif not wl_dest.exists():
+        wl_dest.write_text('{\n  "repos": [],\n  "urls": [],\n  "notes": {}\n}\n', encoding="utf-8")
+
     _write_github_step_summary(markdown_text)
 
     summary = summarize_report(report)
     print(
         f"Done! GitHub: {summary.repos_active} active, "
-        f"{summary.repos_tier1_notice} >= {thresholds.tier1_days}d, "
-        f"{summary.repos_tier2_warning} >= {thresholds.tier2_days}d, "
+        f"{summary.repos_missing} dead/404, "
+        f"{summary.repos_archived} archived ({summary.repos_archived_with_replacement} w/ replacement), "
         f"{summary.repos_tier3_critical} >= {thresholds.tier3_days}d, "
-        f"{summary.repos_archived} archived, {summary.repos_missing} missing"
-        + (
-            f" | Sites: {summary.sites_alive} alive, {summary.sites_dead} dead, "
-            f"{summary.sites_parked} parked, {summary.sites_waf_or_rate_limited} WAF, "
-            f"{summary.newly_discovered_github_links} newly discovered."
-            if run_site_checks
-            else " (site liveness skipped)."
-        ),
+        f"{summary.repos_tier2_warning} >= {thresholds.tier2_days}d, "
+        f"{summary.repos_tier1_notice} >= {thresholds.tier1_days}d",
         flush=True,
     )
-    print(f"Reports written to {args.markdown_out} and {args.json_out}", flush=True)
+    print(
+        f"Reports written to {args.markdown_out}, {args.json_out}, and {args.html_out}",
+        flush=True,
+    )
 
     webhook = args.discord_webhook.strip()
     if webhook:
-        print("Sending summary and report attachment to Discord webhook...", flush=True)
+        print("Sending summary to Discord webhook...", flush=True)
         await send_discord_webhook(webhook, report, args.markdown_out)
         print("Discord notification sent.", flush=True)
 

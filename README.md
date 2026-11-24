@@ -1,20 +1,19 @@
 # fmhy-drift
 
-Checks the [FMHY](https://fmhy.net) index (`api.fmhy.net/single-page`) for dead sites and inactive or archived GitHub repositories.
+Checks the [FMHY](https://fmhy.net) index (`api.fmhy.net/single-page`) for dead sites and dead, archived, or inactive GitHub repositories.
 
-- **GitHub check**: Queries linked `github.com` repos (plus repos inferred from `*.github.io`, `raw.githubusercontent.com`, `jsdelivr`, `githack`, and `statically` URLs) via batched GraphQL using `pushedAt`/commit/release dates. Flags repos at `90` / `180` / `365` days of inactivity, plus archived and 404/451 repos.
-- **Site liveness check**: Only runs when `PROXY_URL` is set, and verifies egress IP differs from the host/runner IP before scanning. Also scrapes live homepages for unlinked `github.com` repos.
+- **Triage & Discord Report UI**: [melo-foundation.github.io/fmhy-drift](https://melo-foundation.github.io/fmhy-drift/) — filter by Dead (`404`/`451`/disabled), Archived (with auto-detected replacement repo links), or `90` / `180` / `365`d inactive; tick items to send a curated report to a Discord webhook; and save false positives to [`whitelist.json`](whitelist.json).
+- **GitHub check**: Queries linked `github.com` repos (plus repos inferred from `*.github.io`, `raw.githubusercontent.com`, `jsdelivr`, `githack`, and `statically` URLs) via batched GraphQL, attaches website/GitHub Pages links, and scans archived repo descriptions/READMEs for successor links.
+- **Site liveness check**: Only runs when `PROXY_URL` is set, verifying egress IP differs from the runner IP before scanning.
 
 ## GitHub Actions
 
-Runs weekly on Mondays (`06:00 UTC`), on push to `main`, and via `workflow_dispatch`.
-
-Optional repository secrets & variables (**Settings → Secrets and variables → Actions**):
+Runs weekly on Mondays (`06:00 UTC`), on code pushes to `main`, and via `workflow_dispatch`.
 
 | Name | Type | Purpose |
 | :--- | :--- | :--- |
 | `PROXY_URL` | Secret | HTTP/SOCKS5 proxy (`socks5h://user:pass@host:port`). Required for site checks; if unset, only GitHub checks run. |
-| `DISCORD_WEBHOOK_URL` | Secret | Posts summary embed and attaches `fmhy-drift-report.md`. |
+| `DISCORD_WEBHOOK_URL` | Secret | Optional automatic summary ping on run completion. |
 | `WARN_DAYS_1` / `2` / `3` | Variable | Inactivity thresholds in days (defaults: `90`, `180`, `365`). |
 
 ## Local Usage

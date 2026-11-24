@@ -1,4 +1,4 @@
-"""Markdown, JSON, and Discord webhook report generators for FMHY drift runs."""
+"""Markdown, JSON, HTML triage, and Discord webhook report generators for FMHY drift runs."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from fmhy_drift.models import (
     SiteCheckResult,
     SiteStatus,
     StalenessTier,
+    is_github_pages_url,
 )
 
 
@@ -39,9 +40,12 @@ class ReportSummary:
     repos_tier2_warning: int
     repos_tier3_critical: int
     repos_archived: int
+    repos_archived_with_replacement: int
     repos_missing: int
     repos_error: int
     newly_discovered_github_links: int
+    whitelisted_repos_skipped: int
+    whitelisted_sites_skipped: int
 
 
 def summarize_report(report: DriftReport) -> ReportSummary:
@@ -81,9 +85,14 @@ def summarize_report(report: DriftReport) -> ReportSummary:
         repos_tier2_warning=sum(1 for r in repo_vals if r.tier == StalenessTier.TIER_2_WARNING),
         repos_tier3_critical=sum(1 for r in repo_vals if r.tier == StalenessTier.TIER_3_CRITICAL),
         repos_archived=sum(1 for r in repo_vals if r.tier == StalenessTier.ARCHIVED),
+        repos_archived_with_replacement=sum(
+            1 for r in repo_vals if r.tier == StalenessTier.ARCHIVED and r.replacement_url
+        ),
         repos_missing=sum(1 for r in repo_vals if r.tier == StalenessTier.MISSING),
         repos_error=sum(1 for r in repo_vals if r.tier == StalenessTier.ERROR),
         newly_discovered_github_links=newly_discovered_count,
+        whitelisted_repos_skipped=report.whitelisted_repos_skipped,
+        whitelisted_sites_skipped=report.whitelisted_sites_skipped,
     )
 
 
@@ -95,8 +104,26 @@ def _entry_location(item: EntryDriftResult) -> str:
     return f"{star}**{item.entry.title}** (`{cat}` — `{item.entry.entry_id}`)"
 
 
-def render_markdown_report(report: DriftReport) -> str:
-    """Render a comprehensive human-readable Markdown report."""
+def _format_web_links_inline(item: EntryDriftResult, rr: RepoActivityResult) -> str:
+    links = item.web_links_for_repo(rr)
+    if not links:
+        return ""
+    parts: list[str] = []
+    for u in links:
+        label = "Pages" if is_github_pages_url(u) else "Site"
+        parts.append(f"{label}: <{u}>")
+    return " | " + " , ".join(parts)
+
+
+def _format_replacement_inline(rr: RepoActivityResult) -> str:
+    if not rr.replacement_url:
+        return ""
+    status = f" ({rr.replacement_status})" if rr.replacement_status else ""
+    return f" | 🔀 **New Repo:** <{rr.replacement_url}>{status}"
+
+
+def render_markdown_report(report: DriftReport, *, pages_url: str | None = None) -> str:
+    """Render a human-readable Markdown report organized into Dead vs. Archived vs. Stale."""
     summary = summarize_report(report)
     t = report.thresholds
     ts_str = report.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -120,13 +147,20 @@ def render_markdown_report(report: DriftReport) -> str:
         f"🟡 Notice `>= {t.tier1_days}d` | "
         f"🟠 Warning `>= {t.tier2_days}d` | "
         f"🔴 Critical `>= {t.tier3_days}d`",
-        "",
-        "## Summary",
-        "",
-        "| Metric | Count |",
-        "| :--- | ---: |",
-        f"| Entries Evaluated | {summary.total_entries} |",
     ]
+    if pages_url:
+        lines.append(f"- **Interactive Triage & Whitelist UI:** {pages_url}")
+
+    lines.extend(
+        [
+            "",
+            "## Summary",
+            "",
+            "| Metric | Count |",
+            "| :--- | ---: |",
+            f"| Entries Evaluated | {summary.total_entries} |",
+        ]
+    )
 
     if pv is not None:
         lines.extend(
@@ -145,11 +179,12 @@ def render_markdown_report(report: DriftReport) -> str:
         [
             f"| Unique GitHub Repos Checked | {summary.unique_repos_checked} |",
             f"| 🟢 Repos Active (`< {t.tier1_days}d`) | {summary.repos_active} |",
-            f"| 🟡 Tier 1 Notice (`{t.tier1_days}–{t.tier2_days - 1}d` inactive) | {summary.repos_tier1_notice} |",
-            f"| 🟠 Tier 2 Warning (`{t.tier2_days}–{t.tier3_days - 1}d` inactive) | {summary.repos_tier2_warning} |",
+            f"| 💀 Dead GitHub Repos (404 / DMCA / Disabled) | {summary.repos_missing} |",
+            f"| 📦 Archived GitHub Repos | {summary.repos_archived} _(🔀 {summary.repos_archived_with_replacement} w/ replacement link)_ |",
             f"| 🔴 Tier 3 Critical (`>= {t.tier3_days}d` inactive) | {summary.repos_tier3_critical} |",
-            f"| 📦 Repos Archived / Disabled | {summary.repos_archived} |",
-            f"| 💀 Repos Missing / 404 / DMCA | {summary.repos_missing} |",
+            f"| 🟠 Tier 2 Warning (`{t.tier2_days}–{t.tier3_days - 1}d` inactive) | {summary.repos_tier2_warning} |",
+            f"| 🟡 Tier 1 Notice (`{t.tier1_days}–{t.tier2_days - 1}d` inactive) | {summary.repos_tier1_notice} |",
+            f"| 🛡️ Whitelisted Repos Skipped | {summary.whitelisted_repos_skipped} |",
         ]
     )
     if pv is not None:
@@ -159,39 +194,54 @@ def render_markdown_report(report: DriftReport) -> str:
     if summary.repos_error:
         lines.append(f"| ⚠️ GitHub API Errors / Rate-Limited | {summary.repos_error} |")
 
-    # Section 1: Dead / Parked / TLS Error sites (only when site checks ran)
-    lines.extend(["", "## 1. Unhealthy Sites (Dead, Parked, or TLS Error)", ""])
-    if pv is None:
-        lines.append("_Skipped in GitHub-only mode (configure `PROXY_URL` to enable proxy site liveness checks)._")
+    # Section 1: Dead / Missing / Disabled GitHub Repositories (strictly separate from Archived!)
+    lines.extend(["", "## 1. 💀 Dead GitHub Repositories (404, DMCA 451, or Disabled)", ""])
+    dead_repos = _collect_entries_by_tiers(report.entries, {StalenessTier.MISSING})
+    if not dead_repos:
+        lines.append("_No dead/404/DMCA GitHub repositories detected._")
     else:
-        unhealthy_entries = [e for e in report.entries if e.any_site_unhealthy]
-        if not unhealthy_entries:
-            lines.append("_No dead, parked, or TLS-broken sites detected._")
-        else:
-            for item in unhealthy_entries:
-                badge = (
-                    "🚨 **[ALL MIRRORS DOWN]** "
-                    if item.all_sites_unhealthy
-                    else "⚠️ **[PARTIAL/MIRROR DOWN]** "
-                )
-                lines.append(f"- {badge}{_entry_location(item)}")
-                for sr in item.site_results:
-                    if sr.is_unhealthy:
-                        lines.append(f"  - `{sr.status.value}`: <{sr.url}> — {sr.reason}")
-
-    # Section 2: Missing & Archived GitHub Repositories
-    lines.extend(["", "## 2. Deleted, DMCA'd, or Archived GitHub Repositories", ""])
-    missing_or_archived = _collect_entries_by_tiers(
-        report.entries, {StalenessTier.MISSING, StalenessTier.ARCHIVED}
-    )
-    if not missing_or_archived:
-        lines.append("_No missing or archived GitHub repositories detected._")
-    else:
-        for item, matched_repos in missing_or_archived:
+        for item, matched_repos in dead_repos:
             lines.append(f"- {_entry_location(item)}")
             for rr in matched_repos:
-                icon = "💀" if rr.tier == StalenessTier.MISSING else "📦"
-                lines.append(f"  - {icon} [{rr.full_name}]({rr.html_url}) — {rr.reason}")
+                web_str = _format_web_links_inline(item, rr)
+                lines.append(f"  - 💀 [{rr.full_name}]({rr.html_url}) — {rr.reason}{web_str}")
+
+    # Section 2: Archived GitHub Repositories (with replacement-detected ones listed first!)
+    lines.extend(["", "## 2. 📦 Archived GitHub Repositories", ""])
+    archived_repos = _collect_entries_by_tiers(report.entries, {StalenessTier.ARCHIVED})
+    if not archived_repos:
+        lines.append("_No archived GitHub repositories detected._")
+    else:
+        with_repl = [
+            (it, [r for r in rs if r.replacement_url])
+            for it, rs in archived_repos
+            if any(r.replacement_url for r in rs)
+        ]
+        without_repl = [
+            (it, [r for r in rs if not r.replacement_url])
+            for it, rs in archived_repos
+            if any(not r.replacement_url for r in rs)
+        ]
+
+        if with_repl:
+            lines.extend(["### 2a. 🔀 Archived With Replacement / New Repo Link", ""])
+            for item, matched_repos in with_repl:
+                lines.append(f"- {_entry_location(item)}")
+                for rr in matched_repos:
+                    web_str = _format_web_links_inline(item, rr)
+                    repl_str = _format_replacement_inline(rr)
+                    lines.append(
+                        f"  - 📦 [{rr.full_name}]({rr.html_url}) — {rr.reason}{web_str}{repl_str}"
+                    )
+            lines.append("")
+
+        if without_repl:
+            lines.extend(["### 2b. 📦 Archived (No Replacement Link Detected)", ""])
+            for item, matched_repos in without_repl:
+                lines.append(f"- {_entry_location(item)}")
+                for rr in matched_repos:
+                    web_str = _format_web_links_inline(item, rr)
+                    lines.append(f"  - 📦 [{rr.full_name}]({rr.html_url}) — {rr.reason}{web_str}")
 
     # Sections 3–5: Stale GitHub Repositories by Inactivity Tier
     tier_sections = [
@@ -223,16 +273,36 @@ def render_markdown_report(report: DriftReport) -> str:
                     if rr.last_activity_at
                     else "never"
                 )
-                src_map = {ref.key: ref.source for ref in item.all_github_refs}
-                src = src_map.get(f"{rr.owner.lower()}/{rr.repo.lower()}", "explicit_markdown")
-                via = " _(auto-discovered on site)_" if src == "discovered_on_site" else ""
+                web_str = _format_web_links_inline(item, rr)
                 lines.append(
                     f"  - [{rr.full_name}]({rr.html_url}) — **{rr.inactive_days}d** inactive "
-                    f"(last activity `{last_str}`){via}"
+                    f"(last activity `{last_str}`){web_str}"
                 )
 
-    # Section 6: Newly Discovered GitHub Repos
-    lines.extend(["", "## 6. 🔎 Newly Discovered GitHub Repositories on Live Sites", ""])
+    # Section 6: Dead / Parked / TLS Error sites
+    lines.extend(["", "## 6. 🌐 Unhealthy Sites (Dead, Parked, or TLS Error)", ""])
+    if pv is None:
+        lines.append(
+            "_Skipped in GitHub-only mode (configure `PROXY_URL` to enable proxy site liveness checks)._"
+        )
+    else:
+        unhealthy_entries = [e for e in report.entries if e.any_site_unhealthy]
+        if not unhealthy_entries:
+            lines.append("_No dead, parked, or TLS-broken sites detected._")
+        else:
+            for item in unhealthy_entries:
+                badge = (
+                    "🚨 **[ALL MIRRORS DOWN]** "
+                    if item.all_sites_unhealthy
+                    else "⚠️ **[PARTIAL/MIRROR DOWN]** "
+                )
+                lines.append(f"- {badge}{_entry_location(item)}")
+                for sr in item.site_results:
+                    if sr.is_unhealthy:
+                        lines.append(f"  - `{sr.status.value}`: <{sr.url}> — {sr.reason}")
+
+    # Section 7: Newly Discovered GitHub Repos on Live Sites
+    lines.extend(["", "## 7. 🔎 Newly Discovered GitHub Repositories on Live Sites", ""])
     if pv is None:
         lines.append("_Skipped in GitHub-only mode._")
     else:
@@ -306,6 +376,7 @@ def render_json_report(report: DriftReport) -> str:
                 "category": item.entry.category,
                 "subcategory": item.entry.subcategory,
                 "starred": item.entry.starred,
+                "web_urls": list(item.entry.site_urls),
                 "all_sites_unhealthy": item.all_sites_unhealthy,
                 "sites": [
                     {
@@ -330,6 +401,9 @@ def render_json_report(report: DriftReport) -> str:
                         "is_archived": rr.is_archived,
                         "is_disabled": rr.is_disabled,
                         "latest_release_tag": rr.latest_release_tag,
+                        "homepage_url": rr.homepage_url,
+                        "replacement_url": rr.replacement_url,
+                        "replacement_status": rr.replacement_status,
                         "reason": rr.reason,
                         "source": next(
                             (
@@ -347,6 +421,14 @@ def render_json_report(report: DriftReport) -> str:
         ],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def github_pages_url_from_env() -> str | None:
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if "/" not in repo:
+        return None
+    owner, name = repo.split("/", 1)
+    return f"https://{owner.lower()}.github.io/{name}/"
 
 
 def _github_run_url() -> str | None:
@@ -368,44 +450,13 @@ def build_discord_payload(report: DriftReport) -> dict:
         s.entries_all_sites_dead + s.repos_missing + s.repos_archived + s.repos_tier3_critical
     )
     if critical_total > 0:
-        color = 0xE74C3C  # Red
+        color = 0xE74C3C
     elif s.sites_dead > 0 or s.repos_tier2_warning > 0:
-        color = 0xE67E22  # Orange
+        color = 0xE67E22
     elif s.repos_tier1_notice > 0:
-        color = 0xF1C40F  # Yellow
+        color = 0xF1C40F
     else:
-        color = 0x2ECC71  # Green
-
-    highlights: list[str] = []
-    for item in report.entries:
-        if len(highlights) >= 8:
-            break
-        if item.all_sites_unhealthy and item.site_results:
-            star = "⭐ " if item.entry.starred else ""
-            highlights.append(
-                f"• 🚨 {star}**{item.entry.title}** — `{item.site_results[0].reason}`"
-            )
-    for item in report.entries:
-        if len(highlights) >= 12:
-            break
-        for rr in item.repo_results:
-            if rr.tier in {
-                StalenessTier.MISSING,
-                StalenessTier.ARCHIVED,
-                StalenessTier.TIER_3_CRITICAL,
-            }:
-                icon = (
-                    "💀"
-                    if rr.tier == StalenessTier.MISSING
-                    else ("📦" if rr.tier == StalenessTier.ARCHIVED else "🔴")
-                )
-                detail = (
-                    f"{rr.inactive_days}d inactive"
-                    if rr.tier == StalenessTier.TIER_3_CRITICAL
-                    else rr.tier.value
-                )
-                highlights.append(f"• {icon} **{item.entry.title}** (`{rr.full_name}`) — {detail}")
-                break
+        color = 0x2ECC71
 
     if pv is not None:
         intro = (
@@ -415,65 +466,43 @@ def build_discord_payload(report: DriftReport) -> dict:
     else:
         intro = (
             f"Checked **{s.unique_repos_checked}** unique GitHub repositories across "
-            f"**{s.total_entries}** FMHY entries _(GitHub-only mode; site liveness skipped)_."
+            f"**{s.total_entries}** FMHY entries _(GitHub-only mode)_."
         )
 
     description_lines = [intro]
+    pages_url = github_pages_url_from_env()
+    if pages_url:
+        description_lines.append(f"👉 **[Open Triage & Whitelist UI]({pages_url})**")
     run_url = _github_run_url()
     if run_url:
-        description_lines.append(f"[View GitHub Actions Run & Artifacts]({run_url})")
-    if highlights:
-        description_lines.append("\n**Top Actionable Flags:**\n" + "\n".join(highlights[:10]))
+        description_lines.append(f"[View GitHub Actions Run]({run_url})")
 
-    description = "\n".join(description_lines)
-    if len(description) > 3900:
-        description = description[:3897] + "..."
-
-    fields: list[dict] = []
-    if pv is not None:
-        fields.append(
-            {
-                "name": "🌐 Site Liveness (Proxy)",
-                "value": (
-                    f"🟢 Alive: **{s.sites_alive}**\n"
-                    f"🔴 Dead: **{s.sites_dead}** _(all-down entries: {s.entries_all_sites_dead})_\n"
-                    f"🟣 Parked: **{s.sites_parked}** | 🔐 TLS: **{s.sites_tls_error}**\n"
-                    f"🛡️ WAF/429: **{s.sites_waf_or_rate_limited}**"
-                ),
-                "inline": True,
-            }
-        )
-    else:
-        fields.append(
-            {
-                "name": "🌐 Site Liveness",
-                "value": "⏭️ Skipped _(GitHub-only / no proxy)_",
-                "inline": True,
-            }
-        )
-
-    fields.append(
+    fields: list[dict] = [
+        {
+            "name": "🌐 Site Liveness",
+            "value": (
+                f"🟢 Alive: **{s.sites_alive}**\n"
+                f"🔴 Dead: **{s.sites_dead}**\n"
+                f"🟣 Parked: **{s.sites_parked}** | 🔐 TLS: **{s.sites_tls_error}**\n"
+                f"🛡️ WAF/429: **{s.sites_waf_or_rate_limited}**"
+                if pv is not None
+                else "⏭️ Skipped _(GitHub-only / no proxy)_"
+            ),
+            "inline": True,
+        },
         {
             "name": "🐙 GitHub Activity",
             "value": (
-                f"🟢 Active (`<{t.tier1_days}d`): **{s.repos_active}**\n"
-                f"🟡 Notice (`>={t.tier1_days}d`): **{s.repos_tier1_notice}**\n"
-                f"🟠 Warning (`>={t.tier2_days}d`): **{s.repos_tier2_warning}**\n"
-                f"🔴 Critical (`>={t.tier3_days}d`): **{s.repos_tier3_critical}**\n"
-                f"📦 Archived: **{s.repos_archived}** | 💀 404/DMCA: **{s.repos_missing}**"
+                f"💀 Dead/404/DMCA: **{s.repos_missing}**\n"
+                f"📦 Archived: **{s.repos_archived}** _(🔀 {s.repos_archived_with_replacement} moved)_\n"
+                f"🔴 `>={t.tier3_days}d`: **{s.repos_tier3_critical}** | "
+                f"🟠 `>={t.tier2_days}d`: **{s.repos_tier2_warning}** | "
+                f"🟡 `>={t.tier1_days}d`: **{s.repos_tier1_notice}**\n"
+                f"🟢 Active: **{s.repos_active}** | 🛡️ Whitelisted: **{s.whitelisted_repos_skipped}**"
             ),
             "inline": True,
-        }
-    )
-
-    if pv is not None:
-        fields.append(
-            {
-                "name": "🔎 Linked Repo Discovery",
-                "value": f"**{s.newly_discovered_github_links}** unlinked GitHub repo(s) found on live sites",
-                "inline": False,
-            }
-        )
+        },
+    ]
 
     footer_prefix = (
         f"Proxy fingerprint: {pv.egress_ip_sha256_prefix}"
@@ -487,7 +516,7 @@ def build_discord_payload(report: DriftReport) -> dict:
             if pv is not None
             else "FMHY GitHub Activity & Staleness Check"
         ),
-        "description": description,
+        "description": "\n".join(description_lines),
         "color": color,
         "timestamp": report.generated_at.isoformat(),
         "fields": fields,

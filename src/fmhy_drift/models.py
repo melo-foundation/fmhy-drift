@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
+from urllib.parse import urlsplit
 
 
 class SiteStatus(StrEnum):
@@ -26,7 +27,7 @@ class StalenessTier(StrEnum):
     TIER_2_WARNING = "tier2_warning"
     TIER_3_CRITICAL = "tier3_critical"
     ARCHIVED = "archived"
-    MISSING = "missing"
+    MISSING = "missing"  # Dead: 404 deleted/private, 451 DMCA, or disabled by GitHub
     ERROR = "error"
 
 
@@ -126,7 +127,7 @@ class SiteCheckResult:
 
 @dataclass
 class RepoActivityResult:
-    """Activity and archival check outcome for a GitHub repository."""
+    """Activity, archival, homepage, and replacement check outcome for a GitHub repo."""
 
     owner: str
     repo: str
@@ -137,6 +138,10 @@ class RepoActivityResult:
     is_disabled: bool = False
     latest_release_tag: str | None = None
     canonical_full_name: str | None = None
+    homepage_url: str | None = None
+    description: str = ""
+    replacement_url: str | None = None
+    replacement_status: str | None = None
     reason: str = ""
 
     @property
@@ -156,6 +161,11 @@ class RepoActivityResult:
             StalenessTier.ARCHIVED,
             StalenessTier.MISSING,
         }
+
+
+def is_github_pages_url(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return host.endswith(".github.io")
 
 
 @dataclass
@@ -184,6 +194,26 @@ class EntryDriftResult:
             if ref.source == "discovered_on_site" and ref.key not in explicit_keys
         ]
 
+    def web_links_for_repo(self, rr: RepoActivityResult | None = None) -> list[str]:
+        """Return deduplicated website and GitHub Pages URLs attached to this entry/repo."""
+        seen: set[str] = set()
+        links: list[str] = []
+        for u in self.entry.site_urls:
+            key = u.rstrip("/").lower()
+            if key not in seen:
+                seen.add(key)
+                links.append(u)
+        if rr and rr.homepage_url:
+            hp = rr.homepage_url.strip()
+            hp_host = (urlsplit(hp).hostname or "").lower()
+            # Don't attach homepage_url if it just points back to github.com/owner/repo
+            if hp_host not in {"github.com", "www.github.com"}:
+                key = hp.rstrip("/").lower()
+                if key not in seen:
+                    seen.add(key)
+                    links.append(hp)
+        return links
+
 
 @dataclass
 class ProxyVerification:
@@ -205,3 +235,5 @@ class DriftReport:
     entries: list[EntryDriftResult]
     unique_sites_checked: int
     unique_repos_checked: int
+    whitelisted_repos_skipped: int = 0
+    whitelisted_sites_skipped: int = 0
