@@ -5,8 +5,40 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from fmhy_drift.parser import clean_url, extract_github_repo
+
+
+def normalize_url_entry(raw: str) -> str | None:
+    """Normalize URL for whitelist comparison (lowercase scheme+host, strip fragment & trailing `/`)."""
+    text = raw.strip()
+    if not text:
+        return None
+    cleaned = clean_url(text)
+    target = cleaned or text
+    try:
+        parts = urlsplit(target)
+    except ValueError:
+        return target.split("#", 1)[0].rstrip("/") or None
+
+    if not parts.scheme or not parts.hostname:
+        return target.split("#", 1)[0].rstrip("/") or None
+
+    scheme = parts.scheme.lower()
+    host = parts.hostname.lower()
+    host_fmt = f"[{host}]" if ":" in host else host
+    netloc = f"{host_fmt}:{parts.port}" if parts.port is not None else host_fmt
+    if parts.username is not None:
+        userinfo = (
+            f"{parts.username}:{parts.password}"
+            if parts.password is not None
+            else parts.username
+        )
+        netloc = f"{userinfo}@{netloc}"
+
+    path = parts.path.rstrip("/")
+    return urlunsplit((scheme, netloc, path, parts.query, "")).rstrip("/")
 
 
 @dataclass
@@ -21,8 +53,8 @@ class Whitelist:
         return f"{owner.lower()}/{repo.lower()}" in self.repos
 
     def is_url_whitelisted(self, url: str) -> bool:
-        cleaned = clean_url(url)
-        return (url in self.urls) or (bool(cleaned) and cleaned in self.urls)
+        norm = normalize_url_entry(url)
+        return (url in self.urls) or (bool(norm) and norm in self.urls)
 
 
 def normalize_repo_entry(raw: str) -> str | None:
@@ -60,8 +92,9 @@ def load_whitelist(path: Path | None) -> Whitelist:
     urls: set[str] = set()
     for item in data.get("urls", []):
         if isinstance(item, str) and item.strip():
-            cleaned = clean_url(item)
-            urls.add(cleaned or item.strip())
+            norm = normalize_url_entry(item)
+            if norm:
+                urls.add(norm)
 
     raw_notes = data.get("notes", {})
     notes = (

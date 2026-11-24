@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       github_only:
-        description: "GitHub activity check only (skips site liveness; needs no proxy)"
+        description: "GitHub repos only (skips proxy-free DoH DNS & proxy HTTP site checks)"
         required: false
-        default: true
+        default: false
         type: boolean
       warn_days_1:
         description: "Tier 1 (Notice) GitHub inactivity threshold in days"
@@ -53,18 +53,14 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
 jobs:
   drift-check:
     name: FMHY Drift & GitHub Staleness Audit
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy_pages.outputs.page_url }}
+    concurrency:
+      group: "drift-check-${{ github.ref }}"
+      cancel-in-progress: true
 
     steps:
       - name: Checkout repository
@@ -83,7 +79,7 @@ jobs:
           PROXY_URL: ${{ secrets.PROXY_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          GITHUB_ONLY: ${{ inputs.github_only || vars.GITHUB_ONLY || 'false' }}
+          GITHUB_ONLY: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.github_only) || vars.GITHUB_ONLY || 'false' }}
           WARN_DAYS_1: ${{ inputs.warn_days_1 || vars.WARN_DAYS_1 || '90' }}
           WARN_DAYS_2: ${{ inputs.warn_days_2 || vars.WARN_DAYS_2 || '180' }}
           WARN_DAYS_3: ${{ inputs.warn_days_3 || vars.WARN_DAYS_3 || '365' }}
@@ -112,13 +108,29 @@ jobs:
             reports/fmhy-drift-report.json
             reports/index.html
           if-no-files-found: ignore
+          overwrite: true
           retention-days: 30
 
       - name: Upload GitHub Pages triage site
-        uses: actions/upload-pages-artifact@v3
+        if: success() && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || (inputs.category_filter == '' && inputs.max_entries == '0' && !inputs.starred_only))
+        uses: actions/upload-pages-artifact@v4
         with:
           path: reports
 
+  deploy-pages:
+    name: Deploy Triage UI to GitHub Pages
+    needs: drift-check
+    if: success() && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || (inputs.category_filter == '' && inputs.max_entries == '0' && !inputs.starred_only))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: "pages"
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy_pages.outputs.page_url }}
+
+    steps:
       - name: Deploy Triage UI to GitHub Pages
         id: deploy_pages
         uses: actions/deploy-pages@v4

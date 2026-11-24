@@ -10,12 +10,14 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fmhy_drift.github_checker import GitHubActivityChecker
+from fmhy_drift.dns_checker import DnsDeadChecker
+from fmhy_drift.github_checker import SOURCE_PRIORITY, GitHubActivityChecker
 from fmhy_drift.models import (
     DriftReport,
     EntryDriftResult,
     GitHubRef,
     ProxyVerification,
+    RepoActivityResult,
     SiteCheckResult,
     TierThresholds,
     WikiEntry,
@@ -78,9 +80,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--skip-without-proxy",
         action="store_true",
         help=(
-            "If no proxy URL is provided, skip site liveness checks instead of failing "
-            "and run only the GitHub repository activity checks."
+            "If no proxy URL is provided, skip HTTP site scraping instead of failing "
+            "and run GitHub repository checks + proxy-free DoH DNS dead-domain checks."
         ),
+    )
+    parser.add_argument(
+        "--dns-check",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Run proxy-free Cloudflare/Google DoH dead-domain checks when HTTP proxy is not used (default: enabled unless --github-only).",
     )
     parser.add_argument(
         "--whitelist",
@@ -248,27 +256,33 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     proxy_url: str | None = None
     proxy_verification: ProxyVerification | None = None
 
-    # 1. Enforce mandatory proxy for site liveness checks (never touch sites from runner IP)
+    # 1. Enforce mandatory proxy for HTTP site liveness checks (never touch sites from runner IP)
     if run_site_checks:
         try:
             proxy_url = validate_proxy_url(args.proxy)
         except ProxyMissingError as exc:
-            if args.skip_without_proxy:
+            if args.skip_without_proxy or args.dns_check is True:
                 print(
-                    "⏭️ No proxy configured (PROXY_URL unset): skipping site liveness checks "
-                    "(never run from a GitHub runner IP) and running GitHub repository checks only.",
+                    "⏭️ No proxy configured (PROXY_URL unset): skipping direct HTTP site checks "
+                    "(never run from a GitHub runner IP).",
                     flush=True,
                 )
                 run_site_checks = False
             else:
                 print(
-                    f"Error: {exc}\nHint: Pass --github-only to check linked GitHub repositories without a proxy.",
+                    f"Error: {exc}\nHint: Pass --github-only (or --dns-check) to run without an HTTP proxy.",
                     file=sys.stderr,
                 )
                 return 2
         except ProxyGuardError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
+
+    run_dns_checks = (
+        False
+        if run_site_checks
+        else (args.dns_check if args.dns_check is not None else (not args.github_only))
+    )
 
     if run_site_checks and proxy_url is not None:
         print("Verifying proxy egress isolation...", flush=True)
@@ -284,8 +298,13 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             f"isolated={proxy_verification.verified_distinct_from_host})",
             flush=True,
         )
+    elif run_dns_checks:
+        print(
+            "Mode: GitHub repository activity + proxy-free DoH DNS dead-domain check.",
+            flush=True,
+        )
     else:
-        print("Mode: GitHub repository activity check only (site liveness skipped).", flush=True)
+        print("Mode: GitHub repository activity check only (site checks skipped).", flush=True)
 
     # 2. Load FMHY index
     if args.input is not None:
@@ -301,13 +320,13 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
 
     entries = _filter_entries(
         entries,
-        github_only=not run_site_checks,
+        github_only=(not run_site_checks and not run_dns_checks),
         category_filter=args.category,
         starred_only=args.starred_only,
         max_entries=args.max_entries,
     )
 
-    # 3. Optional site liveness checks (strictly via verified proxy, skipping whitelisted URLs)
+    # 3. Site checks: full HTTP via verified proxy, OR proxy-free DoH DNS check
     site_results_map: dict[str, SiteCheckResult] = {}
     unique_site_count = 0
     whitelisted_sites_skipped = 0
@@ -319,7 +338,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         unique_site_count = len(urls_to_check)
         print(
             f"Loaded {len(entries)} FMHY entries ({unique_site_count} unique site URLs, "
-            f"{whitelisted_sites_skipped} whitelisted). Running liveness checks via proxy...",
+            f"{whitelisted_sites_skipped} whitelisted). Running HTTP liveness checks via proxy...",
             flush=True,
         )
         site_checker = SiteChecker(
@@ -329,6 +348,22 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             discover_github=args.discover_github,
         )
         site_results_map = await site_checker.check_urls(urls_to_check)
+    elif run_dns_checks:
+        raw_urls = list(dict.fromkeys(u for e in entries for u in e.site_urls))
+        urls_to_check = [u for u in raw_urls if not whitelist.is_url_whitelisted(u)]
+        whitelisted_sites_skipped = len(raw_urls) - len(urls_to_check)
+        unique_site_count = len(urls_to_check)
+        print(
+            f"Loaded {len(entries)} FMHY entries ({unique_site_count} unique site URLs, "
+            f"{whitelisted_sites_skipped} whitelisted). Running proxy-free DoH DNS checks...",
+            flush=True,
+        )
+        dns_checker = DnsDeadChecker()
+        site_results_map = await dns_checker.check_urls(urls_to_check)
+        print(
+            f"DoH DNS check flagged {len(site_results_map)} dead/parked site URL(s).",
+            flush=True,
+        )
     else:
         print(f"Loaded {len(entries)} FMHY entries with linked GitHub repositories.", flush=True)
 
@@ -382,21 +417,46 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     for entry, refs in zip(entries, entry_all_refs, strict=True):
         s_results = (
             [site_results_map[u] for u in entry.site_urls if u in site_results_map]
-            if run_site_checks
+            if (run_site_checks or run_dns_checks)
             else []
         )
-        kept_refs: list[GitHubRef] = []
-        r_results = []
-        for r in refs:
+        candidate_pairs: list[tuple[int, GitHubRef, RepoActivityResult]] = []
+        for idx, r in enumerate(refs):
             rr = repo_results_map.get(r.key)
             if rr is None:
                 continue
+            if "/" in rr.full_name:
+                canon_owner, canon_repo = rr.full_name.split("/", 1)
+                if whitelist.is_repo_whitelisted(canon_owner, canon_repo):
+                    whitelisted_repo_keys_seen.add(rr.full_name.lower())
+                    continue
             if r.source == "domain_heuristic" and rr.tier.value == "missing":
                 continue
-            kept_refs.append(r)
-            r_results.append(rr)
+            if (
+                r.source == "github_pages"
+                and rr.tier.value == "active"
+                and "backed by private" in rr.reason
+            ):
+                continue
+            candidate_pairs.append((idx, r, rr))
 
-        if not run_site_checks and not r_results:
+        # Sort strongest source first (`explicit_markdown` > ... > `domain_heuristic`),
+        # deduplicate per entry by canonical `rr.full_name.lower()`, then restore entry order.
+        candidate_pairs.sort(key=lambda item: (-SOURCE_PRIORITY.get(item[1].source, 0), item[0]))
+        seen_canon: set[str] = set()
+        deduped_pairs: list[tuple[int, GitHubRef, RepoActivityResult]] = []
+        for idx, r, rr in candidate_pairs:
+            canon_key = rr.full_name.lower()
+            if canon_key in seen_canon:
+                continue
+            seen_canon.add(canon_key)
+            deduped_pairs.append((idx, r, rr))
+        deduped_pairs.sort(key=lambda item: item[0])
+
+        kept_refs = [r for _, r, _ in deduped_pairs]
+        r_results = [rr for _, _, rr in deduped_pairs]
+
+        if not run_site_checks and not r_results and not s_results:
             continue
 
         entry_results.append(

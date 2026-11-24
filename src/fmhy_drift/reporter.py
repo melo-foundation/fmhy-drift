@@ -62,7 +62,7 @@ def summarize_report(report: DriftReport) -> ReportSummary:
         for sr in item.site_results:
             sites_by_url.setdefault(sr.url, sr)
         for rr in item.repo_results:
-            repos_by_key.setdefault(f"{rr.owner.lower()}/{rr.repo.lower()}", rr)
+            repos_by_key.setdefault(rr.full_name.lower(), rr)
 
     site_vals = list(sites_by_url.values())
     repo_vals = list(repos_by_key.values())
@@ -101,10 +101,12 @@ def format_duration_human(inactive_days: int | None) -> str:
     if inactive_days is None:
         return "unknown age"
     years, rem = divmod(inactive_days, 365)
-    months, days = divmod(rem, 30)
     if years >= 1:
+        months = min(11, rem // 30)
         span = f"{years}y {months}m" if months else f"{years}y"
         return f"{span} ({inactive_days}d)"
+    months = min(11, rem // 30)
+    days = rem - months * 30
     if months >= 1:
         span = f"{months}m {days}d" if days else f"{months}m"
         return f"{span} ({inactive_days}d)"
@@ -127,18 +129,19 @@ def _entry_location(item: EntryDriftResult) -> str:
 
 
 SOURCE_LABELS: dict[str, str] = {
-    "explicit_markdown": "linked on FMHY",
-    "github_pages": "heuristic: github.io",
-    "github_cdn": "heuristic: raw/CDN",
-    "domain_heuristic": "heuristic: subdomain",
-    "discovered_on_site": "scraped from website",
+    "explicit_markdown": "Listed in FMHY",
+    "github_pages": "Guessed: github.io (not in FMHY)",
+    "github_cdn": "Guessed: raw/CDN (not in FMHY)",
+    "domain_heuristic": "Guessed: subdomain (not in FMHY)",
+    "discovered_on_site": "Scraped on site (not in FMHY)",
 }
 
 
 def _repo_source_label(item: EntryDriftResult, rr: RepoActivityResult) -> str:
-    key = f"{rr.owner.lower()}/{rr.repo.lower()}"
+    req_key = f"{rr.owner.lower()}/{rr.repo.lower()}"
+    canon_key = rr.full_name.lower()
     raw_src = next(
-        (ref.source for ref in item.all_github_refs if ref.key == key),
+        (ref.source for ref in item.all_github_refs if ref.key in {req_key, canon_key}),
         "explicit_markdown",
     )
     return SOURCE_LABELS.get(raw_src, raw_src)
@@ -169,13 +172,20 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
     ts_str = report.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")
     pv = report.proxy_verification
 
-    mode_line = (
-        f"- **Proxy Verification:** `{pv.redacted_proxy}` "
-        f"(egress fingerprint `{pv.egress_ip_sha256_prefix}`, "
-        f"isolated from runner: `{pv.verified_distinct_from_host}`)"
-        if pv is not None
-        else "- **Mode:** `GitHub-Only` _(site liveness & homepage scraping skipped — no proxy used)_"
-    )
+    dns_only_sites = pv is None and report.unique_sites_checked > 0
+    if pv is not None:
+        mode_line = (
+            f"- **Proxy Verification:** `{pv.redacted_proxy}` "
+            f"(egress fingerprint `{pv.egress_ip_sha256_prefix}`, "
+            f"isolated from runner: `{pv.verified_distinct_from_host}`)"
+        )
+    elif dns_only_sites:
+        mode_line = (
+            "- **Mode:** `GitHub + Proxy-Free DoH DNS` "
+            "_(direct HTTP scraping skipped; dead/parked domains checked via Cloudflare & Google DoH)_"
+        )
+    else:
+        mode_line = "- **Mode:** `GitHub-Only` _(site liveness & homepage scraping skipped — no proxy used)_"
 
     lines: list[str] = [
         "# FMHY Index Drift & GitHub Activity Report",
@@ -214,6 +224,14 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                 f"| ❌ Entries Where ALL Site Links Failed | {summary.entries_all_sites_dead} |",
             ]
         )
+    elif dns_only_sites:
+        lines.extend(
+            [
+                f"| Unique Site URLs Checked (Proxy-Free DoH DNS) | {summary.unique_sites_checked} |",
+                f"| 🔴 Domains Dead in DNS (NXDOMAIN / Sinkhole / Empty) | {summary.sites_dead} |",
+                f"| 🟣 Domains Parked in DNS (Parking CNAME) | {summary.sites_parked} |",
+            ]
+        )
 
     lines.extend(
         [
@@ -245,17 +263,33 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
             for rr in matched_repos:
                 src_lbl = _repo_source_label(item, rr)
                 web_str = _format_web_links_inline(item, rr)
-                age_note = ""
-                if rr.inactive_days is not None:
-                    last_str = (
-                        f", last push `{rr.last_activity_at.strftime('%Y-%m-%d')}`"
-                        if rr.last_activity_at
-                        else ""
+                if "last archived alive" in rr.reason:
+                    base_reason = rr.reason.split(" — last archived alive", 1)[0]
+                    if rr.inactive_days is not None:
+                        seen_str = (
+                            f" (`{rr.last_activity_at.strftime('%Y-%m-%d')}`)"
+                            if rr.last_activity_at
+                            else ""
+                        )
+                        age_note = f" — last seen alive **{format_duration_human(rr.inactive_days)}** ago{seen_str}"
+                    else:
+                        base_reason = rr.reason.replace("last archived alive", "last seen alive")
+                        age_note = ""
+                    lines.append(
+                        f"  - 💀 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {base_reason}{age_note}{web_str}"
                     )
-                    age_note = f" — **{format_duration_human(rr.inactive_days)}** without updates{last_str}"
-                lines.append(
-                    f"  - 💀 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {rr.reason}{age_note}{web_str}"
-                )
+                else:
+                    age_note = ""
+                    if rr.inactive_days is not None:
+                        last_str = (
+                            f", last push `{rr.last_activity_at.strftime('%Y-%m-%d')}`"
+                            if rr.last_activity_at
+                            else ""
+                        )
+                        age_note = f" — **{format_duration_human(rr.inactive_days)}** without updates{last_str}"
+                    lines.append(
+                        f"  - 💀 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {rr.reason}{age_note}{web_str}"
+                    )
 
     # Section 2: Archived GitHub Repositories (longest unupdated at the top)
     lines.extend(["", "## 2. 📦 Archived GitHub Repositories", ""])
@@ -361,9 +395,9 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
 
     # Section 6: Dead / Parked / TLS Error sites
     lines.extend(["", "## 6. 🌐 Unhealthy Sites (Dead, Parked, or TLS Error)", ""])
-    if pv is None:
+    if pv is None and not dns_only_sites:
         lines.append(
-            "_Skipped in GitHub-only mode (configure `PROXY_URL` to enable proxy site liveness checks)._"
+            "_Skipped in GitHub-only mode (configure `PROXY_URL` or `--dns-check` to enable site checks)._"
         )
     else:
         unhealthy_entries = [e for e in report.entries if e.any_site_unhealthy]
@@ -435,9 +469,14 @@ def render_json_report(report: DriftReport) -> str:
     """Serialize the full `DriftReport` and summary metrics to formatted JSON."""
     summary = summarize_report(report)
     pv = report.proxy_verification
+    mode_str = (
+        "full"
+        if pv is not None
+        else ("github_and_dns" if report.unique_sites_checked > 0 else "github_only")
+    )
     payload = {
         "generated_at": report.generated_at.isoformat(),
-        "mode": "full" if pv is not None else "github_only",
+        "mode": mode_str,
         "index_source": report.index_source,
         "thresholds": {
             "tier1_days": report.thresholds.tier1_days,
@@ -461,6 +500,7 @@ def render_json_report(report: DriftReport) -> str:
                 "category": item.entry.category,
                 "subcategory": item.entry.subcategory,
                 "starred": item.entry.starred,
+                "raw_line": item.entry.raw_line,
                 "web_urls": list(item.entry.site_urls),
                 "all_sites_unhealthy": item.all_sites_unhealthy,
                 "sites": [
@@ -477,6 +517,7 @@ def render_json_report(report: DriftReport) -> str:
                 "github_repos": [
                     {
                         "full_name": rr.full_name,
+                        "requested_full_name": f"{rr.owner}/{rr.repo}",
                         "html_url": rr.html_url,
                         "tier": rr.tier.value,
                         "inactive_days": rr.inactive_days,
@@ -496,7 +537,11 @@ def render_json_report(report: DriftReport) -> str:
                             (
                                 ref.source
                                 for ref in item.all_github_refs
-                                if ref.key == f"{rr.owner.lower()}/{rr.repo.lower()}"
+                                if ref.key
+                                in {
+                                    f"{rr.owner.lower()}/{rr.repo.lower()}",
+                                    rr.full_name.lower(),
+                                }
                             ),
                             "explicit_markdown",
                         ),
@@ -656,8 +701,19 @@ async def send_discord_webhook(
                 resp = await client.post(webhook_url, json=payload)
 
             if resp.status_code == 429 and attempt == 0:
-                retry_after = float(resp.json().get("retry_after", 2.0))
-                await asyncio.sleep(min(retry_after, 10.0))
+                retry_after = 2.0
+                try:
+                    body = resp.json()
+                    if isinstance(body, dict):
+                        retry_after = float(body.get("retry_after", 2.0))
+                except (ValueError, TypeError):
+                    hdr = resp.headers.get("Retry-After", "").strip()
+                    if hdr:
+                        try:
+                            retry_after = float(hdr)
+                        except ValueError:
+                            pass
+                await asyncio.sleep(min(max(0.0, retry_after), 10.0))
                 continue
 
             resp.raise_for_status()

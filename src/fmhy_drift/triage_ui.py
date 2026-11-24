@@ -93,21 +93,16 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
     .tb-menu-item u { text-decoration: underline; }
     .tb-menubar-spacer { flex: 1; }
-    .tb-throbber {
-      width: 16px;
-      height: 16px;
-      opacity: 0.7;
-    }
 
     /* Big Icon Mail Toolbar */
     .tb-toolbar {
-      min-height: 52px;
+      min-height: 50px;
       background: linear-gradient(180deg, #f6f9fd 0%, #e1eaf6 50%, #d2dfef 51%, #dfe9f7 100%);
-      border-bottom: 1px solid #9cacbf;
+      border-bottom: 1px solid #a9b9cd;
       box-shadow: inset 0 1px 0 #ffffff;
       display: flex;
       align-items: center;
-      padding: 3px 8px;
+      padding: 2px 8px;
       gap: 3px;
       flex-wrap: wrap;
     }
@@ -117,7 +112,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       align-items: center;
       justify-content: center;
       min-width: 54px;
-      height: 44px;
+      height: 43px;
       padding: 2px 7px;
       border: 1px solid transparent;
       border-radius: 3px;
@@ -138,13 +133,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       border-color: #6f8cb2;
     }
     .tb-tool-btn svg {
-      width: 22px;
-      height: 22px;
+      width: 21px;
+      height: 21px;
       display: block;
     }
     .tb-sep {
       width: 2px;
-      height: 36px;
+      height: 34px;
       margin: 0 4px;
       border-left: 1px solid #a8b7cc;
       border-right: 1px solid #f7faff;
@@ -156,12 +151,22 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       padding: 0 6px;
       font-size: 11px;
       color: #1f2e40;
+      flex-wrap: wrap;
     }
     .tb-filter-group label {
       display: inline-flex;
       align-items: center;
       gap: 3px;
       cursor: pointer;
+    }
+    .tb-source-select {
+      height: 23px;
+      padding: 1px 5px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid #5f82ab;
+      background: #ffffff;
+      color: #14273d;
     }
     .tb-search-wrap {
       margin-left: auto;
@@ -171,7 +176,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       border: 1px solid #7f9db9;
       box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
       height: 23px;
-      width: 235px;
+      width: 225px;
       padding: 0 5px;
       gap: 4px;
     }
@@ -183,6 +188,51 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       font-size: 11.5px;
       background: transparent;
       color: #111;
+    }
+
+    /* Classic XUL Quick-Filter / Live Thresholds Bar */
+    .tb-threshbar {
+      min-height: 26px;
+      background: linear-gradient(180deg, #eef3fa 0%, #dde7f4 100%);
+      border-bottom: 1px solid #96a8c0;
+      box-shadow: inset 0 1px 0 #ffffff;
+      display: flex;
+      align-items: center;
+      padding: 2px 10px;
+      gap: 8px;
+      font-size: 11px;
+      color: #1c2c3f;
+      flex-wrap: wrap;
+    }
+    .tb-thresh-title {
+      font-weight: 700;
+      color: #20344d;
+    }
+    .tb-thresh-field {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .tb-num-input {
+      width: 52px;
+      height: 20px;
+      border: 1px solid #7f9db9;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
+      background: #ffffff;
+      font-family: Tahoma, "Segoe UI", sans-serif;
+      font-size: 11px;
+      padding: 1px 4px;
+      color: #111;
+      text-align: right;
+    }
+    .tb-thresh-sep {
+      color: #8fa3bd;
+      padding: 0 2px;
+    }
+    .tb-thresh-hint {
+      margin-left: auto;
+      color: #3c526d;
+      font-size: 10.5px;
     }
 
     /* Main 3-Pane Workspace */
@@ -270,7 +320,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     /* Right Split: Thread Table (Top) + Message/Outbox Preview (Bottom) */
     .tb-right-split {
       display: grid;
-      grid-template-rows: minmax(220px, 54%) minmax(210px, 46%);
+      grid-template-rows: minmax(210px, 53%) minmax(210px, 47%);
       gap: 4px;
       min-height: 0;
       min-width: 0;
@@ -345,31 +395,34 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       vertical-align: middle;
     }
     .col-cb { width: 26px; text-align: center !important; }
-    .col-star { width: 24px; text-align: center !important; }
-    .col-clip { width: 24px; text-align: center !important; }
-    .col-subject { width: 21%; }
-    .col-repo { width: 20%; }
+    .col-star { width: 30px; text-align: center !important; padding: 0 2px !important; }
+    .col-clip { width: 30px; text-align: center !important; padding: 0 2px !important; }
+    .col-subject { width: 20%; }
+    .col-repo { width: 19%; }
     .col-src { width: 11%; }
-    .col-web { width: 22%; }
+    .col-web { width: 21%; }
     .col-cat { width: 12%; }
-    .col-status { width: 14%; }
+    .col-status { width: 17%; }
+
+    /* Crystal-clear FMHY Explicit vs Heuristic Source Pills */
     .src-pill {
       display: inline-block;
       padding: 0 5px;
       border-radius: 2px;
       font-size: 10.5px;
-      border: 1px solid #b5c4d8;
-      background: #eef3fa;
-      color: #243b56;
+      font-weight: 600;
+      border: 1px solid #1b6e2d;
+      background: #dff4e4;
+      color: #1b6e2d;
     }
     .src-pill.heur {
-      background: #fff6e0;
-      border-color: #dec178;
-      color: #6b4c00;
+      background: #fff4d6;
+      border: 1px dashed #b58105;
+      color: #6b4900;
     }
     tr.selected .src-pill {
-      background: rgba(255,255,255,0.2);
-      border-color: rgba(255,255,255,0.55);
+      background: rgba(255,255,255,0.22);
+      border-color: rgba(255,255,255,0.75);
       color: #ffffff;
     }
 
@@ -459,6 +512,45 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       font-size: 11.5px;
       line-height: 1.45;
       word-break: break-word;
+    }
+    .tb-src-banner-ok {
+      background: #dff4e4;
+      border: 1px solid #1b6e2d;
+      color: #145322;
+      padding: 4px 7px;
+      margin: 4px 0 6px 0;
+      font-weight: 600;
+      font-size: 11.5px;
+    }
+    .tb-src-banner-warn {
+      background: #fff4d6;
+      border: 1px dashed #b58105;
+      color: #6b4900;
+      padding: 4px 7px;
+      margin: 4px 0 6px 0;
+      font-weight: 600;
+      font-size: 11.5px;
+    }
+    .tb-raw-line-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 7px;
+      margin-bottom: 3px;
+      font-size: 11px;
+    }
+    .tb-raw-line-box {
+      background: #f3f6fb;
+      border: 1px solid #9eb0c7;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
+      padding: 4px 6px;
+      font-family: Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      color: #1a2533;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 68px;
+      overflow-y: auto;
     }
     .tb-input, .tb-textarea {
       border: 1px solid #7f9db9;
@@ -557,13 +649,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     <!-- Menu bar -->
     <div class="tb-menubar">
-      <a class="tb-menu-item" href="./fmhy-drift-report.md" target="_blank"><u>F</u>ile (.md)</a>
-      <a class="tb-menu-item" href="./fmhy-drift-report.json" target="_blank"><u>D</u>ata (.json)</a>
+      <a class="tb-menu-item" href="./fmhy-drift-report.md" target="_blank" rel="noopener"><u>F</u>ile (.md)</a>
+      <a class="tb-menu-item" href="./fmhy-drift-report.json" target="_blank" rel="noopener"><u>D</u>ata (.json)</a>
       <span class="tb-menu-item" id="menu-tick-page"><u>E</u>dit (Tick Page)</span>
       <span class="tb-menu-item" id="menu-clear-ticks"><u>C</u>lear Ticks</span>
       <span class="tb-menu-item" id="menu-outbox"><u>M</u>essage Outbox</span>
       <span class="tb-menu-item" id="menu-copy-wl"><u>T</u>ools (Edit whitelist.json)</span>
-      <a class="tb-menu-item" href="https://github.com/melo-foundation/fmhy-drift" target="_blank"><u>H</u>elp (GitHub)</a>
+      <a class="tb-menu-item" id="menu-help-gh" href="https://github.com/melo-foundation/fmhy-drift" target="_blank" rel="noopener"><u>H</u>elp (GitHub)</a>
       <div class="tb-menubar-spacer"></div>
       <span style="color:#556880;font-size:10.5px;padding-right:6px;">Keys: ↑/↓ Navigate · Space Tick · J Whitelist</span>
     </div>
@@ -607,10 +699,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       <div class="tb-filter-group">
         <label><input type="checkbox" id="starred-only" /> ★ Starred</label>
         <label><input type="checkbox" id="has-web-only" /> 📎 Has Site/Pages</label>
-        <select id="source-filter" class="tb-input" style="height:22px;padding:1px 4px;font-size:11px;">
-          <option value="">Source: All</option>
-          <option value="explicit">Linked on FMHY Only</option>
-          <option value="heuristic">Heuristics Only</option>
+        <select id="source-filter" class="tb-source-select" title="Filter between repos actually linked in FMHY vs inferred via URL heuristics">
+          <option value="">FMHY Link: All</option>
+          <option value="explicit">✓ Has Actual GitHub in FMHY Only</option>
+          <option value="heuristic">? Guessed / Not in FMHY Only</option>
         </select>
       </div>
 
@@ -621,6 +713,26 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         </svg>
         <input type="text" id="search" placeholder="Subject, Repo, or Domain" />
       </div>
+    </div>
+
+    <!-- Live Interactive Thresholds & Min-Days Quick Filter Bar -->
+    <div class="tb-threshbar">
+      <span class="tb-thresh-title">Thresholds (days):</span>
+      <label class="tb-thresh-field" title="Notice tier threshold in days (lower below 90 down to 0 to inspect active repos)">
+        Notice &gt;= <input type="number" id="thresh-t1" class="tb-num-input" min="0" max="99999" step="1" value="90" />
+      </label>
+      <label class="tb-thresh-field" title="Warning tier threshold in days">
+        Warn &gt;= <input type="number" id="thresh-t2" class="tb-num-input" min="0" max="99999" step="1" value="180" />
+      </label>
+      <label class="tb-thresh-field" title="Critical tier threshold in days">
+        Crit &gt;= <input type="number" id="thresh-t3" class="tb-num-input" min="0" max="99999" step="1" value="365" />
+      </label>
+      <span class="tb-thresh-sep">|</span>
+      <label class="tb-thresh-field" title="Filter current folder immediately to repos with >= X inactive days (e.g. 500 or 730)">
+        <strong>Min Age (days):</strong> <input type="number" id="min-days" class="tb-num-input" min="0" max="99999" step="1" value="0" />
+      </label>
+      <button type="button" class="tb-classic-btn" id="btn-reset-thresh" style="padding:1px 7px;font-size:10.5px;">Reset</button>
+      <span class="tb-thresh-hint" id="thresh-summary">Live tier calculation across all checked repos</span>
     </div>
 
     <!-- 3-Pane Workspace -->
@@ -647,7 +759,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
                   <th class="col-clip" data-sort="links" title="Has Website / Pages / Replacement">📎</th>
                   <th class="col-subject" data-sort="title">Entry / Title</th>
                   <th class="col-repo" data-sort="repo">Repository</th>
-                  <th class="col-src" data-sort="source">Found Via</th>
+                  <th class="col-src" data-sort="source">FMHY Link?</th>
                   <th class="col-web" data-sort="web">Website / Pages / New Repo</th>
                   <th class="col-cat" data-sort="cat">Category</th>
                   <th class="col-status" data-sort="days">Status / Age ▼</th>
@@ -682,7 +794,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
                 <span id="card-tier-pill"></span>
               </div>
               <div id="card-details">
-                <div class="tb-detail-row" style="color:#556880;">Click any row in the list above (or press ↑/↓) to inspect its GitHub repository, attached website / GitHub Pages link, and detected replacement link.</div>
+                <div class="tb-detail-row" style="color:#556880;">Click any row in the list above (or press ↑/↓) to inspect its GitHub repository, FMHY link provenance, literal FMHY markdown line, attached website / GitHub Pages link, and detected replacement link.</div>
               </div>
 
               <div class="tb-blue-bar" style="margin-top:10px;">
@@ -736,21 +848,63 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
   </div>
 
   <script>
-    const REPO_SLUG = "melo-foundation/fmhy-drift";
+    function detectRepoSlug() {
+      try {
+        const host = (window.location.hostname || "").toLowerCase();
+        if (host.endsWith(".github.io")) {
+          const owner = host.slice(0, -".github.io".length);
+          const seg = (window.location.pathname || "").split("/").filter(Boolean)[0];
+          if (owner && seg) return `${owner}/${seg}`;
+        }
+      } catch {}
+      return "melo-foundation/fmhy-drift";
+    }
+
+    const REPO_SLUG = detectRepoSlug();
     const PAGE_SIZE = 100;
 
-    const FOLDERS = [
-      { id: "inbox_all", label: "Inbox (All Flagged)", icon: "inbox" },
-      { id: "missing", label: "Dead / 404 Repos", icon: "inbox" },
-      { id: "archived_moved", label: "Archived — Moved", icon: "moved" },
-      { id: "archived", label: "All Archived", icon: "folder" },
-      { id: "tier3_critical", label: "Inactive 1y+", icon: "folder" },
-      { id: "tier2_warning", label: "Inactive 6m+", icon: "folder" },
-      { id: "tier1_notice", label: "Inactive 3m+", icon: "folder" },
-      { id: "dead_sites", label: "Dead / Parked Sites", icon: "folder" },
-      { id: "outbox", label: "Discord Outbox", icon: "outbox" },
-      { id: "whitelisted", label: "Whitelisted", icon: "junk" },
-    ];
+    function normalizeRepoKey(raw) {
+      if (!raw || typeof raw !== "string") return "";
+      let s = raw.trim();
+      if (!s) return "";
+      s = s.replace(/^https?:\/\/(?:www\.)?github\.com\//i, "");
+      s = s.split(/[?#]/)[0].replace(/^\/+|\/+$/g, "");
+      const parts = s.split("/").filter(Boolean);
+      if (parts.length < 2) return "";
+      const owner = parts[0].toLowerCase();
+      const repo = parts[1].replace(/\.git$/i, "").toLowerCase();
+      return (owner && repo) ? `${owner}/${repo}` : "";
+    }
+
+    function normalizeUrlKey(raw) {
+      if (!raw || typeof raw !== "string") return "";
+      let s = raw.trim().replace(/[.,;:)>\]"']+$/g, "");
+      if (!s) return "";
+      try {
+        const u = new URL(s);
+        if (!/^https?:$/i.test(u.protocol)) return "";
+        u.hostname = u.hostname.toLowerCase();
+        if ((u.protocol === "https:" && u.port === "443") || (u.protocol === "http:" && u.port === "80")) {
+          u.port = "";
+        }
+        let out = u.toString();
+        if (u.pathname !== "/" && out.endsWith("/")) out = out.slice(0, -1);
+        return out;
+      } catch {
+        return s;
+      }
+    }
+
+    function safeHref(url) {
+      if (!url || typeof url !== "string") return "";
+      const trimmed = url.trim();
+      return /^https?:\/\//i.test(trimmed) ? trimmed : "";
+    }
+
+    function safeParseJson(str, fallback) {
+      try { return JSON.parse(str); }
+      catch { return fallback; }
+    }
 
     const state = {
       items: [],
@@ -761,21 +915,66 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       sortAsc: false,
       page: 0,
       focusedId: null,
-      selectedIds: new Set(JSON.parse(localStorage.getItem("fmhy_selected_ids") || "[]")),
-      notes: JSON.parse(localStorage.getItem("fmhy_item_notes") || "{}"),
-      whitelistRepos: new Set(JSON.parse(localStorage.getItem("fmhy_wl_repos") || "[]")),
-      whitelistUrls: new Set(JSON.parse(localStorage.getItem("fmhy_wl_urls") || "[]")),
+      t1: 90,
+      t2: 180,
+      t3: 365,
+      minDays: 0,
+      reportDefaults: { t1: 90, t2: 180, t3: 365 },
+      thresholdsCustomized: false,
+      selectedIds: new Set(safeParseJson(localStorage.getItem("fmhy_selected_ids") || "[]", [])),
+      notes: safeParseJson(localStorage.getItem("fmhy_item_notes") || "{}", {}),
+      whitelistRepos: new Set(
+        safeParseJson(localStorage.getItem("fmhy_wl_repos") || "[]", [])
+          .map(normalizeRepoKey)
+          .filter(Boolean)
+      ),
+      whitelistUrls: new Set(
+        safeParseJson(localStorage.getItem("fmhy_wl_urls") || "[]", [])
+          .map(normalizeUrlKey)
+          .filter(Boolean)
+      ),
       whitelistNotes: {},
+      whitelistDirty: localStorage.getItem("fmhy_wl_dirty") === "1",
     };
 
+    const helpLinkEl = document.getElementById("menu-help-gh");
+    if (helpLinkEl) helpLinkEl.href = `https://github.com/${REPO_SLUG}`;
     document.getElementById("webhook-url").value = localStorage.getItem("fmhy_discord_webhook") || "";
     document.getElementById("gh-pat").value = localStorage.getItem("fmhy_gh_pat") || "";
+
+    function getFolders() {
+      return [
+        { id: "inbox_all", label: "Inbox (All Flagged)", icon: "inbox", tip: "All non-whitelisted dead, archived, dead-site, and inactive (>= Notice threshold) entries" },
+        { id: "missing", label: "Dead / 404 Repos", icon: "inbox", tip: "404, DMCA 451, or disabled GitHub repositories" },
+        { id: "archived_moved", label: "Archived — Moved", icon: "moved", tip: "Archived repositories with a detected replacement repository link" },
+        { id: "archived", label: "All Archived", icon: "folder", tip: "All archived GitHub repositories" },
+        { id: "tier3_critical", label: `Inactive >=${state.t3}d`, icon: "folder", tip: `Critical inactivity tier: >= ${state.t3} days since last push/release` },
+        { id: "tier2_warning", label: `Inactive >=${state.t2}d`, icon: "folder", tip: `Warning inactivity tier: ${state.t2}–${Math.max(state.t2, state.t3 - 1)} days since last push/release` },
+        { id: "tier1_notice", label: `Inactive >=${state.t1}d`, icon: "folder", tip: `Notice inactivity tier: ${state.t1}–${Math.max(state.t1, state.t2 - 1)} days since last push/release` },
+        { id: "dead_sites", label: "Dead / Parked Sites", icon: "folder", tip: "Dead, parked, or TLS-failing website URLs" },
+        { id: "outbox", label: "Discord Outbox", icon: "outbox", tip: "Entries ticked for curated Discord report" },
+        { id: "whitelisted", label: "Whitelisted", icon: "junk", tip: "Ignored / whitelisted repositories and URLs" },
+      ];
+    }
+
+    function effectiveTier(it) {
+      if (it.kind === "site") return "dead_sites";
+      if (it.rawTier === "missing" || it.isDisabled) return "missing";
+      if (it.rawTier === "archived" || it.isArchived) return "archived";
+      if (it.inactiveDays == null) return "tier3_critical";
+      if (it.inactiveDays >= state.t3) return "tier3_critical";
+      if (it.inactiveDays >= state.t2) return "tier2_warning";
+      if (it.inactiveDays >= state.t1) return "tier1_notice";
+      return "active";
+    }
 
     function saveLocalState() {
       localStorage.setItem("fmhy_selected_ids", JSON.stringify([...state.selectedIds]));
       localStorage.setItem("fmhy_item_notes", JSON.stringify(state.notes));
       localStorage.setItem("fmhy_wl_repos", JSON.stringify([...state.whitelistRepos]));
       localStorage.setItem("fmhy_wl_urls", JSON.stringify([...state.whitelistUrls]));
+      if (state.whitelistDirty) localStorage.setItem("fmhy_wl_dirty", "1");
+      else localStorage.removeItem("fmhy_wl_dirty");
     }
 
     function setStatus(msg) {
@@ -812,72 +1011,177 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
 
     function isWhitelisted(item) {
-      if (item.kind === "repo") return state.whitelistRepos.has(item.wlKey);
-      return state.whitelistUrls.has(item.wlKey);
+      if (item.kind === "repo") {
+        return state.whitelistRepos.has(item.wlKey) || Boolean(item.origKey && state.whitelistRepos.has(item.origKey));
+      }
+      return (
+        state.whitelistUrls.has(item.wlKey) ||
+        Boolean(item.origKey && state.whitelistUrls.has(item.origKey))
+      );
     }
 
     function formatSourceBadge(src) {
       if (!src || src === "explicit_markdown") {
-        return { short: "Linked on FMHY", full: "Linked directly on FMHY markdown", isHeur: false };
+        return {
+          short: "✓ In FMHY",
+          full: "✅ Directly linked in FMHY listing",
+          discordTag: "in FMHY",
+          isHeur: false,
+        };
       }
       if (src === "github_pages") {
-        return { short: "Heuristic (github.io)", full: "Inferred from *.github.io URL heuristic", isHeur: true };
+        return {
+          short: "? github.io",
+          full: "⚠️ NOT in FMHY — guessed via *.github.io heuristic",
+          discordTag: "guessed: github.io — not in FMHY",
+          isHeur: true,
+        };
       }
       if (src === "github_cdn") {
-        return { short: "Heuristic (Raw/CDN)", full: "Inferred from raw/jsdelivr/githack CDN URL", isHeur: true };
+        return {
+          short: "? Raw/CDN",
+          full: "⚠️ NOT in FMHY — guessed from raw/CDN URL",
+          discordTag: "guessed: raw/CDN — not in FMHY",
+          isHeur: true,
+        };
       }
       if (src === "domain_heuristic") {
-        return { short: "Heuristic (Domain)", full: "Inferred from <repo>.<owner>.<tld> subdomain", isHeur: true };
+        return {
+          short: "? Domain",
+          full: "⚠️ NOT in FMHY — guessed from subdomain",
+          discordTag: "guessed: subdomain — not in FMHY",
+          isHeur: true,
+        };
       }
       if (src === "discovered_on_site") {
-        return { short: "Scraped on Site", full: "Discovered on live website HTML", isHeur: true };
+        return {
+          short: "? Scraped",
+          full: "⚠️ NOT in FMHY — scraped from website HTML",
+          discordTag: "scraped from website — not in FMHY",
+          isHeur: true,
+        };
       }
-      return { short: src, full: src, isHeur: true };
+      return {
+        short: `? ${src}`,
+        full: `⚠️ NOT in FMHY — ${src}`,
+        discordTag: `guessed: ${src} — not in FMHY`,
+        isHeur: true,
+      };
+    }
+
+    function formatAgeParts(days) {
+      if (days == null || !Number.isFinite(days) || days < 0 || days >= 999999) return null;
+      const d = Math.floor(days);
+      const yrs = Math.floor(d / 365);
+      const rem = d % 365;
+      const mos = Math.min(11, Math.floor(rem / 30));
+      const remDays = rem - mos * 30;
+      if (yrs >= 1) {
+        const short = mos > 0 ? `${yrs}y ${mos}m` : `${yrs}y`;
+        return { short, full: `${short} (${d}d)` };
+      }
+      if (mos >= 1) {
+        const short = remDays > 0 ? `${mos}m ${remDays}d` : `${mos}m`;
+        return { short, full: `${short} (${d}d)` };
+      }
+      return { short: `${d}d`, full: `${d}d` };
     }
 
     function formatAgeHuman(days) {
-      if (days == null || days < 0 || days >= 999999) return null;
-      const yrs = Math.floor(days / 365);
-      const mos = Math.floor((days % 365) / 30);
-      const remDays = days % 30;
-      if (yrs >= 1) {
-        return (mos > 0 ? `${yrs}y ${mos}m` : `${yrs}y`) + ` (${days}d)`;
-      }
-      if (mos >= 1) {
-        return (remDays > 0 ? `${mos}m ${remDays}d` : `${mos}m`) + ` (${days}d)`;
-      }
-      return `${days}d`;
+      const p = formatAgeParts(days);
+      return p ? p.full : null;
+    }
+
+    function formatAgeShort(days) {
+      const p = formatAgeParts(days);
+      return p ? p.short : null;
     }
 
     function escapeHtml(s) {
-      return String(s)
+      return String(s ?? "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
     }
 
+    function decodeBase64Utf8(b64) {
+      const clean = String(b64 || "").replace(/\s+/g, "");
+      const bin = atob(clean);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new TextDecoder("utf-8").decode(bytes);
+    }
+
+    function applyRemoteWhitelistPayload(wl) {
+      if (!wl || typeof wl !== "object") return;
+      const remoteRepos = new Set(
+        (Array.isArray(wl.repos) ? wl.repos : []).map(normalizeRepoKey).filter(Boolean)
+      );
+      const remoteUrls = new Set(
+        (Array.isArray(wl.urls) ? wl.urls : []).map(normalizeUrlKey).filter(Boolean)
+      );
+      const remoteNotes = (wl.notes && typeof wl.notes === "object" && !Array.isArray(wl.notes))
+        ? wl.notes
+        : {};
+
+      if (!state.whitelistDirty) {
+        state.whitelistRepos = remoteRepos;
+        state.whitelistUrls = remoteUrls;
+        state.whitelistNotes = remoteNotes;
+        saveLocalState();
+      } else {
+        state.whitelistNotes = { ...remoteNotes, ...state.whitelistNotes };
+      }
+    }
+
+    async function loadRemoteWhitelist() {
+      const pat = document.getElementById("gh-pat").value.trim();
+      const apiHeaders = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      };
+      if (pat) apiHeaders["Authorization"] = `Bearer ${pat}`;
+
+      // 1. Try GitHub Contents API first (no 5-minute raw CDN staleness)
+      try {
+        const apiResp = await fetch(
+          `https://api.github.com/repos/${REPO_SLUG}/contents/whitelist.json`,
+          { headers: apiHeaders, cache: "no-store" }
+        );
+        if (apiResp.ok) {
+          const meta = await apiResp.json();
+          if (meta && typeof meta.content === "string") {
+            const parsed = JSON.parse(decodeBase64Utf8(meta.content));
+            applyRemoteWhitelistPayload(parsed);
+            return;
+          }
+        }
+      } catch {}
+
+      // 2. Fallback to sibling ./whitelist.json or raw.githubusercontent.com
+      const fallbackUrls = [
+        "./whitelist.json",
+        `https://raw.githubusercontent.com/${REPO_SLUG}/main/whitelist.json?t=${Date.now()}`,
+      ];
+      for (const u of fallbackUrls) {
+        try {
+          const r = await fetch(u, { cache: "no-store" });
+          if (r.ok) {
+            const wl = await r.json();
+            applyRemoteWhitelistPayload(wl);
+            return;
+          }
+        } catch {}
+      }
+    }
+
     async function loadData() {
       document.getElementById("run-meta").textContent = "Loading whitelist and drift report...";
       try {
-        const wlUrls = [
-          `https://raw.githubusercontent.com/${REPO_SLUG}/main/whitelist.json?t=${Date.now()}`,
-          "./whitelist.json"
-        ];
-        for (const u of wlUrls) {
-          try {
-            const r = await fetch(u);
-            if (r.ok) {
-              const wl = await r.json();
-              (wl.repos || []).forEach(x => state.whitelistRepos.add(String(x).toLowerCase()));
-              (wl.urls || []).forEach(x => state.whitelistUrls.add(String(x)));
-              state.whitelistNotes = wl.notes || {};
-              break;
-            }
-          } catch {}
-        }
+        await loadRemoteWhitelist();
 
-        const resp = await fetch(`./fmhy-drift-report.json?t=${Date.now()}`);
+        const resp = await fetch(`./fmhy-drift-report.json?t=${Date.now()}`, { cache: "no-store" });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const report = await resp.json();
         ingestReport(report);
@@ -886,44 +1190,86 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       }
     }
 
+    function syncThresholdInputs() {
+      document.getElementById("thresh-t1").value = String(state.t1);
+      document.getElementById("thresh-t2").value = String(state.t2);
+      document.getElementById("thresh-t3").value = String(state.t3);
+      document.getElementById("min-days").value = String(state.minDays);
+    }
+
     function ingestReport(report) {
+      if (report.thresholds) {
+        state.reportDefaults = {
+          t1: report.thresholds.tier1_days ?? 90,
+          t2: report.thresholds.tier2_days ?? 180,
+          t3: report.thresholds.tier3_days ?? 365,
+        };
+        if (!state.thresholdsCustomized) {
+          state.t1 = state.reportDefaults.t1;
+          state.t2 = state.reportDefaults.t2;
+          state.t3 = state.reportDefaults.t3;
+          syncThresholdInputs();
+        }
+      }
+
       const dt = new Date(report.generated_at).toISOString().replace("T", " ").slice(0, 16) + " UTC";
       document.getElementById("run-meta").textContent =
-        `Last scan: ${dt}  |  Mode: ${report.mode}  |  Checked: ${report.summary.unique_repos_checked} repos  |  Thresholds: ${report.thresholds.tier1_days}d / ${report.thresholds.tier2_days}d / ${report.thresholds.tier3_days}d`;
+        `Last scan: ${dt}  |  Mode: ${report.mode}  |  Checked: ${report.summary.unique_repos_checked} repos  |  Report defaults: ${state.reportDefaults.t1}d / ${state.reportDefaults.t2}d / ${state.reportDefaults.t3}d`;
 
       const items = [];
+      const seenIds = new Set();
       const cats = new Set();
 
       for (const entry of report.entries || []) {
-        cats.add(entry.category);
+        if (entry.category) cats.add(entry.category);
         const catLabel = entry.subcategory ? `${entry.category} > ${entry.subcategory}` : entry.category;
+        const rawLine = typeof entry.raw_line === "string" ? entry.raw_line : "";
 
         for (const rr of entry.github_repos || []) {
-          if (rr.tier === "active") continue;
-          const wlKey = rr.full_name.toLowerCase();
+          if (rr.tier === "error") continue;
+          const wlKey = normalizeRepoKey(rr.full_name) || String(rr.full_name || "").toLowerCase();
+          const origKey = normalizeRepoKey(rr.requested_full_name || rr.full_name) || wlKey;
+          const id = `repo:${entry.entry_id}:${wlKey}`;
+          if (seenIds.has(id)) continue;
+          seenIds.add(id);
+
           const mergedWeb = [...(entry.web_urls || [])];
-          if (rr.homepage_url && !mergedWeb.some(u => u.replace(/\/$/, "").toLowerCase() === rr.homepage_url.replace(/\/$/, "").toLowerCase())) {
+          if (
+            rr.homepage_url &&
+            !mergedWeb.some(u => u.replace(/\/$/, "").toLowerCase() === rr.homepage_url.replace(/\/$/, "").toLowerCase())
+          ) {
             mergedWeb.push(rr.homepage_url);
           }
+
+          const isMissing = rr.tier === "missing" || Boolean(rr.is_disabled);
+          const sortDays = isMissing
+            ? 2_000_000 + (rr.inactive_days ?? 999_999)
+            : (rr.inactive_days != null ? rr.inactive_days : -1);
+
           items.push({
-            id: `repo:${entry.entry_id}:${wlKey}`,
+            id,
             kind: "repo",
             wlKey,
+            origKey,
+            requestedFullName: rr.requested_full_name || rr.full_name,
             title: entry.title,
             starred: Boolean(entry.starred),
             category: entry.category,
             catLabel,
             entryId: entry.entry_id,
-            tier: rr.tier,
+            rawLine,
+            rawTier: rr.tier,
+            isArchived: Boolean(rr.is_archived || rr.tier === "archived"),
+            isDisabled: Boolean(rr.is_disabled),
             fullName: rr.full_name,
             htmlUrl: rr.html_url,
             source: rr.source || "explicit_markdown",
-            inactiveDays: rr.inactive_days,
+            inactiveDays: rr.inactive_days != null ? rr.inactive_days : null,
             lastActivityAt: rr.last_activity_at ? rr.last_activity_at.slice(0, 10) : null,
             archivedDays: rr.archived_days != null ? rr.archived_days : null,
             archivedAt: rr.archived_at ? rr.archived_at.slice(0, 10) : null,
-            sortDays: rr.inactive_days != null ? rr.inactive_days : 1000000,
-            reason: rr.reason,
+            sortDays,
+            reason: rr.reason || "",
             replacementUrl: rr.replacement_url || null,
             replacementStatus: rr.replacement_status || null,
             webUrls: mergedWeb,
@@ -932,23 +1278,31 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
         for (const sr of entry.sites || []) {
           if (!["dead", "parked", "tls_error"].includes(sr.status)) continue;
+          const wlKey = normalizeUrlKey(sr.url) || String(sr.url || "").trim();
+          const origKey = String(sr.url || "").trim();
+          const id = `site:${entry.entry_id}:${wlKey}`;
+          if (seenIds.has(id)) continue;
+          seenIds.add(id);
+
           items.push({
-            id: `site:${entry.entry_id}:${sr.url}`,
+            id,
             kind: "site",
-            wlKey: sr.url,
+            wlKey,
+            origKey,
             title: entry.title,
             starred: Boolean(entry.starred),
             category: entry.category,
             catLabel,
             entryId: entry.entry_id,
-            tier: "dead_sites",
+            rawLine,
+            rawTier: "dead_sites",
             fullName: "—",
             siteUrl: sr.url,
             siteStatus: sr.status,
             inactiveDays: null,
             lastActivityAt: null,
-            sortDays: 999999,
-            reason: sr.reason,
+            sortDays: 1_500_000,
+            reason: sr.reason || "",
             replacementUrl: null,
             replacementStatus: null,
             webUrls: [sr.url],
@@ -969,13 +1323,14 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         return state.items.filter(it => state.selectedIds.has(it.id));
       }
       if (folderId === "inbox_all") {
-        return state.items.filter(it => !isWhitelisted(it));
+        return state.items.filter(it => !isWhitelisted(it) && effectiveTier(it) !== "active");
       }
       return state.items.filter(it => {
         if (isWhitelisted(it)) return false;
-        if (folderId === "archived_moved") return it.kind === "repo" && it.tier === "archived" && Boolean(it.replacementUrl);
+        const tier = effectiveTier(it);
+        if (folderId === "archived_moved") return it.kind === "repo" && tier === "archived" && Boolean(it.replacementUrl);
         if (folderId === "dead_sites") return it.kind === "site";
-        return it.kind === "repo" && it.tier === folderId;
+        return it.kind === "repo" && tier === folderId;
       });
     }
 
@@ -984,15 +1339,17 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       const starredOnly = document.getElementById("starred-only").checked;
       const hasWebOnly = document.getElementById("has-web-only").checked;
       const srcMode = document.getElementById("source-filter").value;
+      const minDays = state.minDays;
 
       const list = itemsForFolder(state.activeFolder).filter(it => {
         if (state.activeCategory && it.category !== state.activeCategory) return false;
         if (starredOnly && !it.starred) return false;
         if (hasWebOnly && (!it.webUrls || it.webUrls.length === 0)) return false;
-        if (srcMode === "explicit" && it.kind === "repo" && it.source !== "explicit_markdown") return false;
+        if (srcMode === "explicit" && (it.kind !== "repo" || it.source !== "explicit_markdown")) return false;
         if (srcMode === "heuristic" && (it.kind !== "repo" || it.source === "explicit_markdown")) return false;
+        if (minDays > 0 && (it.inactiveDays == null || it.inactiveDays < minDays)) return false;
         if (!q) return true;
-        const hay = `${it.title} ${it.catLabel} ${it.fullName || ""} ${it.siteUrl || ""} ${it.replacementUrl || ""} ${it.source || ""} ${(it.webUrls || []).join(" ")}`.toLowerCase();
+        const hay = `${it.title} ${it.catLabel} ${it.fullName || ""} ${it.requestedFullName || ""} ${it.siteUrl || ""} ${it.replacementUrl || ""} ${it.source || ""} ${it.rawLine || ""} ${(it.webUrls || []).join(" ")}`.toLowerCase();
         return hay.includes(q);
       });
 
@@ -1007,7 +1364,6 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         else if (state.sortField === "cat") { return dir * a.catLabel.localeCompare(b.catLabel); }
         else if (state.sortField === "web") { va = a.replacementUrl || a.webUrls?.[0] || ""; vb = b.replacementUrl || b.webUrls?.[0] || ""; return dir * va.localeCompare(vb); }
         else {
-          // Default ("days"): strictly longest-unupdated / dead at the top!
           va = a.sortDays;
           vb = b.sortDays;
         }
@@ -1018,15 +1374,16 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
 
     function renderFolderTree() {
+      const folders = getFolders();
       const tree = document.getElementById("folder-tree");
       let html = `<div class="tb-tree-root">▾ ${folderSvg("folder")} <span>Local Drift Folders</span></div>`;
 
-      for (const f of FOLDERS) {
+      for (const f of folders) {
         const cnt = itemsForFolder(f.id).length;
         const activeCls = state.activeFolder === f.id ? " active" : "";
         const boldCls = cnt > 0 ? " has-items" : "";
         const countSuffix = cnt > 0 ? ` (${cnt})` : "";
-        html += `<div class="tb-folder-item${activeCls}${boldCls}" data-folder="${f.id}">
+        html += `<div class="tb-folder-item${activeCls}${boldCls}" data-folder="${f.id}" title="${escapeHtml(f.tip || f.label)}">
           ${folderSvg(f.icon)}
           <span>${escapeHtml(f.label)}${countSuffix}</span>
         </div>`;
@@ -1046,13 +1403,20 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
       tree.innerHTML = html;
 
+      const activeFolderObj = folders.find(x => x.id === state.activeFolder);
+      document.getElementById("window-title").textContent =
+        `${activeFolderObj ? activeFolderObj.label : "Drift"} - FMHY Drift Thunderbird`;
+
+      const totalLoadedRepos = state.items.filter(it => it.kind === "repo").length;
+      const flaggedCount = itemsForFolder("inbox_all").length;
+      const minSuffix = state.minDays > 0 ? ` · Min Age >= ${state.minDays}d active` : "";
+      document.getElementById("thresh-summary").textContent =
+        `${flaggedCount} flagged / ${totalLoadedRepos} loaded repo rows${minSuffix}`;
+
       tree.querySelectorAll("[data-folder]").forEach(el => {
         el.onclick = () => {
           state.activeFolder = el.getAttribute("data-folder");
           state.page = 0;
-          const folderObj = FOLDERS.find(x => x.id === state.activeFolder);
-          document.getElementById("window-title").textContent =
-            `${folderObj ? folderObj.label : "Drift"} - FMHY Drift Thunderbird`;
           renderAll();
         };
       });
@@ -1067,46 +1431,92 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
 
     function formatStatusCell(it) {
+      if (it.kind === "site") return `${it.siteStatus}: ${it.reason || "unhealthy"}`;
+      const tier = effectiveTier(it);
       const age = formatAgeHuman(it.inactiveDays);
-      const archAge = formatAgeHuman(it.archivedDays);
-      if (it.kind === "site") return `${it.siteStatus}: ${it.reason}`;
-      if (it.tier === "missing") {
-        if (it.reason.includes("disabled")) {
-          return age ? `Disabled · ${age}` : "Disabled";
+      const pushShort = formatAgeShort(it.inactiveDays);
+      const archShort = formatAgeShort(it.archivedDays);
+
+      if (tier === "missing") {
+        if (it.isDisabled || it.reason.toLowerCase().includes("disabled")) {
+          return age ? `Disabled · last push ${age}` : "Disabled";
         }
         if (it.reason.includes("451")) {
-          return age ? `DMCA 451 · ${age}` : "Dead (DMCA 451)";
+          return pushShort ? `DMCA 451 · last seen alive ${pushShort} ago` : "Dead (DMCA 451)";
         }
-        return age ? `404 · last seen ${age}` : "Dead (404 Gone)";
+        return pushShort ? `404 · last seen alive ${pushShort} ago` : "Dead (404 Gone)";
       }
-      if (it.tier === "archived") {
-        if (archAge && it.archivedAt) {
-          return `Archived ${archAge} ago (${it.archivedAt})`;
+      if (tier === "archived") {
+        if (archShort && pushShort) {
+          return `Arch ${archShort} · push ${pushShort}`;
         }
-        return age ? `Archived · last push ${age}` : "Archived";
+        if (archShort) {
+          return `Arch ${archShort}`;
+        }
+        return pushShort ? `Arch · push ${pushShort}` : "Archived";
       }
-      return age ? `${age} ago` : `${it.inactiveDays}d ago`;
+      return age ? `${age} ago` : (it.reason || "Empty / unknown age");
+    }
+
+    function renderSafeLink(url, labelText, extraClass = "row-link", stopProp = true) {
+      const safe = safeHref(url);
+      const stopAttr = stopProp ? ` onclick="event.stopPropagation()"` : "";
+      const clsAttr = extraClass ? ` class="${extraClass}"` : "";
+      if (!safe) {
+        return `<span>${escapeHtml(labelText || url || "—")}</span>`;
+      }
+      return `<a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer"${clsAttr}${stopAttr}>${escapeHtml(labelText)}</a>`;
     }
 
     function formatWebCell(it) {
       const parts = [];
       if (it.replacementUrl) {
-        parts.push(`<a href="${escapeHtml(it.replacementUrl)}" target="_blank" rel="noopener" class="row-link repl-tag" onclick="event.stopPropagation()">↪ ${escapeHtml(shortUrlLabel(it.replacementUrl))}</a>`);
+        parts.push(renderSafeLink(it.replacementUrl, `↪ ${shortUrlLabel(it.replacementUrl)}`, "row-link repl-tag", true));
       }
       for (const u of (it.webUrls || [])) {
         const prefix = isPagesUrl(u) ? "Pages:" : "Web:";
-        parts.push(`<a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="row-link" onclick="event.stopPropagation()">${prefix} ${escapeHtml(shortUrlLabel(u))}</a>`);
+        parts.push(renderSafeLink(u, `${prefix} ${shortUrlLabel(u)}`, "row-link", true));
       }
       return parts.join(" · ") || `<span class="muted-cell">—</span>`;
     }
 
+    function updateSortHeaders() {
+      document.querySelectorAll("th[data-sort]").forEach(th => {
+        if (!th.dataset.baseLabel) {
+          th.dataset.baseLabel = th.textContent.replace(/\s*[▲▼]$/, "");
+        }
+        const field = th.getAttribute("data-sort");
+        const isIconCol = field === "starred" || field === "links";
+        const arrow = state.sortField === field
+          ? (isIconCol ? (state.sortAsc ? "▲" : "▼") : (state.sortAsc ? " ▲" : " ▼"))
+          : "";
+        th.textContent = th.dataset.baseLabel + arrow;
+      });
+    }
+
+    function updateStatusBarCounts(showingCount) {
+      const dirtyMark = state.whitelistDirty ? " *" : "";
+      const wlTotal = state.whitelistRepos.size + state.whitelistUrls.size;
+      if (typeof showingCount === "number") {
+        document.getElementById("stat-showing").textContent = `Showing: ${showingCount}`;
+      }
+      document.getElementById("stat-ticked").textContent = `Ticked: ${state.selectedIds.size}`;
+      document.getElementById("stat-wl").textContent = `Whitelisted: ${wlTotal}${dirtyMark}`;
+      document.getElementById("wl-count").textContent = `${wlTotal} whitelisted${dirtyMark}`;
+    }
+
     function renderTable() {
+      updateSortHeaders();
       const all = filteredAndSortedItems();
       const totalPages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
       if (state.page >= totalPages) state.page = totalPages - 1;
       const slice = all.slice(state.page * PAGE_SIZE, (state.page + 1) * PAGE_SIZE);
 
-      if (!state.focusedId && slice.length > 0) {
+      if (slice.length === 0) {
+        if (!all.some(x => x.id === state.focusedId)) {
+          state.focusedId = null;
+        }
+      } else if (!slice.some(x => x.id === state.focusedId)) {
         state.focusedId = slice[0].id;
       }
 
@@ -1114,23 +1524,25 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       tbody.innerHTML = "";
 
       for (const it of slice) {
+        const tier = effectiveTier(it);
         const tr = document.createElement("tr");
+        tr.dataset.id = it.id;
         const isSel = state.focusedId === it.id;
         const isTicked = state.selectedIds.has(it.id);
         tr.className =
           (isSel ? "selected " : "") +
           (isTicked ? "ticked " : "") +
-          ((it.starred || it.replacementUrl || it.tier === "missing") ? "bold-row" : "");
+          ((it.starred || it.replacementUrl || tier === "missing") ? "bold-row" : "");
 
         const hasClip = (it.webUrls && it.webUrls.length > 0) || Boolean(it.replacementUrl);
 
         const repoCellHtml = it.kind === "repo"
-          ? `<a href="${escapeHtml(it.htmlUrl)}" target="_blank" rel="noopener" class="row-link" onclick="event.stopPropagation()">${escapeHtml(it.fullName)}</a>`
-          : `<a href="${escapeHtml(it.siteUrl)}" target="_blank" rel="noopener" class="row-link" onclick="event.stopPropagation()">${escapeHtml(shortUrlLabel(it.siteUrl))}</a>`;
+          ? renderSafeLink(it.htmlUrl, it.fullName, "row-link", true)
+          : renderSafeLink(it.siteUrl, shortUrlLabel(it.siteUrl), "row-link", true);
 
         const srcInfo = it.kind === "repo"
           ? formatSourceBadge(it.source)
-          : { short: "FMHY Site", full: "Website URL from FMHY", isHeur: false };
+          : { short: "✓ In FMHY", full: "✅ Website URL directly in FMHY listing", isHeur: false };
         const srcCellHtml = `<span class="src-pill${srcInfo.isHeur ? " heur" : ""}" title="${escapeHtml(srcInfo.full)}">${escapeHtml(srcInfo.short)}</span>`;
 
         tr.innerHTML = `
@@ -1157,13 +1569,14 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
         tr.onclick = () => {
           state.focusedId = it.id;
-          renderTable();
+          tbody.querySelectorAll("tr.selected").forEach(r => r.classList.remove("selected"));
+          tr.classList.add("selected");
           renderInspector();
         };
 
         tr.ondblclick = () => {
-          const url = it.kind === "repo" ? it.htmlUrl : it.siteUrl;
-          if (url) window.open(url, "_blank", "noopener");
+          const url = safeHref(it.kind === "repo" ? it.htmlUrl : it.siteUrl);
+          if (url) window.open(url, "_blank", "noopener,noreferrer");
         };
 
         tbody.appendChild(tr);
@@ -1172,10 +1585,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       document.getElementById("page-label").textContent = `Page ${state.page + 1} / ${totalPages}`;
       document.getElementById("prev-pg").disabled = state.page <= 0;
       document.getElementById("next-pg").disabled = state.page + 1 >= totalPages;
-      document.getElementById("stat-showing").textContent = `Showing: ${all.length}`;
-      document.getElementById("stat-ticked").textContent = `Ticked: ${state.selectedIds.size}`;
-      document.getElementById("stat-wl").textContent =
-        `Whitelisted: ${state.whitelistRepos.size + state.whitelistUrls.size}`;
+      updateStatusBarCounts(all.length);
     }
 
     function renderInspector() {
@@ -1189,17 +1599,18 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         document.getElementById("card-heading").textContent = "No Entry Selected";
         document.getElementById("card-tier-pill").textContent = "";
         document.getElementById("card-details").innerHTML =
-          `<div class="tb-detail-row" style="color:#556880;">Select an entry from the folder list above.</div>`;
+          `<div class="tb-detail-row" style="color:#556880;">Select an entry from the folder list above (or clear active search/filters).</div>`;
         noteInput.value = "";
         noteInput.disabled = true;
         return;
       }
 
+      const tier = effectiveTier(it);
       const star = it.starred ? "★ " : "";
       document.getElementById("hdr-title").textContent = star + it.title;
       document.getElementById("hdr-repo").innerHTML = it.kind === "repo"
-        ? `<a href="${escapeHtml(it.htmlUrl)}" target="_blank" rel="noopener">${escapeHtml(it.fullName)}</a>`
-        : `<a href="${escapeHtml(it.siteUrl)}" target="_blank" rel="noopener">${escapeHtml(it.siteUrl)}</a>`;
+        ? renderSafeLink(it.htmlUrl, it.fullName, "", false)
+        : renderSafeLink(it.siteUrl, it.siteUrl, "", false);
       document.getElementById("hdr-cat").textContent = `${it.catLabel} (${it.entryId})`;
 
       document.getElementById("hdr-tick-btn").textContent =
@@ -1213,26 +1624,45 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       let detailsHtml = "";
       if (it.kind === "repo") {
         const sInfo = formatSourceBadge(it.source);
-        detailsHtml += `<div class="tb-detail-row"><strong>GitHub Repository:</strong> <a href="${escapeHtml(it.htmlUrl)}" target="_blank" rel="noopener">${escapeHtml(it.htmlUrl)}</a></div>`;
-        detailsHtml += `<div class="tb-detail-row"><strong>How Repo Was Found:</strong> ${escapeHtml(sInfo.full)}</div>`;
+        const resolvedDiffers = Boolean(
+          it.requestedFullName && it.requestedFullName !== it.fullName
+        );
+        const resolvedLine = resolvedDiffers
+          ? `<div style="font-weight:400;margin-top:2px;">Resolved from: <code>${escapeHtml(it.requestedFullName)}</code> &rarr; <code>${escapeHtml(it.fullName)}</code></div>`
+          : "";
+
+        if (!sInfo.isHeur) {
+          detailsHtml += `<div class="tb-src-banner-ok">✅ GitHub URL is directly in the FMHY listing${resolvedLine}</div>`;
+        } else {
+          const heurExplain = sInfo.full.replace(/^⚠️\s*NOT in FMHY\s*—\s*/i, "");
+          detailsHtml += `<div class="tb-src-banner-warn">⚠️ No GitHub URL in FMHY listing — inferred via heuristic (${escapeHtml(heurExplain)})${resolvedLine}</div>`;
+        }
+        detailsHtml += `<div class="tb-detail-row"><strong>GitHub Repository:</strong> ${renderSafeLink(it.htmlUrl, it.htmlUrl, "", false)}</div>`;
       } else {
-        detailsHtml += `<div class="tb-detail-row"><strong>Target URL:</strong> <a href="${escapeHtml(it.siteUrl)}" target="_blank" rel="noopener">${escapeHtml(it.siteUrl)}</a></div>`;
+        detailsHtml += `<div class="tb-src-banner-ok">✅ Website URL is directly in the FMHY listing</div>`;
+        detailsHtml += `<div class="tb-detail-row"><strong>Target URL:</strong> ${renderSafeLink(it.siteUrl, it.siteUrl, "", false)}</div>`;
       }
+
       const ageTxt = formatAgeHuman(it.inactiveDays);
       const archAgeTxt = formatAgeHuman(it.archivedDays);
-      const lastDateTxt = it.lastActivityAt ? ` (last push ${escapeHtml(it.lastActivityAt)})` : "";
       if (archAgeTxt && it.archivedAt) {
         detailsHtml += `<div class="tb-detail-row"><strong>Archived When:</strong> <strong>${escapeHtml(archAgeTxt)} ago</strong> (${escapeHtml(it.archivedAt)})</div>`;
       }
       if (ageTxt) {
-        detailsHtml += `<div class="tb-detail-row"><strong>Last Update / Seen:</strong> <strong>${escapeHtml(ageTxt)} ago</strong>${lastDateTxt}</div>`;
+        if (tier === "missing" && !it.isDisabled) {
+          const seenDateTxt = it.lastActivityAt ? ` (last seen alive ${escapeHtml(it.lastActivityAt)})` : "";
+          detailsHtml += `<div class="tb-detail-row"><strong>Wayback / Last Seen Alive:</strong> <strong>${escapeHtml(ageTxt)} ago</strong>${seenDateTxt}</div>`;
+        } else {
+          const pushDateTxt = it.lastActivityAt ? ` (last push ${escapeHtml(it.lastActivityAt)})` : "";
+          detailsHtml += `<div class="tb-detail-row"><strong>Last Push / Release:</strong> <strong>${escapeHtml(ageTxt)} ago</strong>${pushDateTxt}</div>`;
+        }
       }
-      detailsHtml += `<div class="tb-detail-row"><strong>Status Detail:</strong> ${escapeHtml(it.reason)}</div>`;
+      detailsHtml += `<div class="tb-detail-row"><strong>Status Detail:</strong> ${escapeHtml(it.reason || "Empty / unknown age")}</div>`;
 
       if (it.webUrls && it.webUrls.length > 0) {
         const wlinks = it.webUrls.map(u => {
           const tag = isPagesUrl(u) ? "[GitHub Pages]" : "[Website]";
-          return `${tag} <a href="${escapeHtml(u)}" target="_blank" rel="noopener">${escapeHtml(u)}</a>`;
+          return `${tag} ${renderSafeLink(u, u, "", false)}`;
         }).join("<br/>");
         detailsHtml += `<div class="tb-detail-row"><strong>Attached Web / Pages:</strong><br/>${wlinks}</div>`;
       } else {
@@ -1243,11 +1673,34 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         const st = it.replacementStatus ? ` (${escapeHtml(it.replacementStatus)})` : "";
         detailsHtml += `<div class="tb-detail-row" style="background:#e9f7ed;border:1px solid #8fd19e;padding:4px 6px;margin-top:6px;">
           <strong style="color:#0b6b24;">↪ Detected Replacement Repo:</strong>
-          <a href="${escapeHtml(it.replacementUrl)}" target="_blank" rel="noopener"><strong>${escapeHtml(it.replacementUrl)}</strong></a>${st}
+          <strong>${renderSafeLink(it.replacementUrl, it.replacementUrl, "", false)}</strong>${st}
         </div>`;
       }
 
+      const hasRawLine = Boolean(it.rawLine && it.rawLine.trim());
+      detailsHtml += `
+        <div class="tb-raw-line-hdr">
+          <strong>Literal FMHY Listing Line:</strong>
+          ${hasRawLine ? `<button type="button" class="tb-classic-btn" id="btn-copy-raw-line" style="padding:1px 6px;font-size:10.5px;">Copy Line</button>` : ""}
+        </div>
+        <div class="tb-raw-line-box">${hasRawLine ? escapeHtml(it.rawLine) : `<span style="color:#667788;font-style:italic;">(Literal raw_line not present in this report JSON — re-run fmhy-drift to include)</span>`}</div>
+      `;
+
       document.getElementById("card-details").innerHTML = detailsHtml;
+
+      const copyLineBtn = document.getElementById("btn-copy-raw-line");
+      if (copyLineBtn && hasRawLine) {
+        copyLineBtn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(it.rawLine);
+            copyLineBtn.textContent = "✓ Copied";
+            setStatus("Copied literal FMHY markdown line to clipboard.");
+            setTimeout(() => { if (copyLineBtn.isConnected) copyLineBtn.textContent = "Copy Line"; }, 1400);
+          } catch (err) {
+            setStatus("Clipboard copy failed: " + err.message);
+          }
+        };
+      }
 
       noteInput.disabled = false;
       noteInput.value = state.notes[it.id] || "";
@@ -1267,10 +1720,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       if (selected.length === 0) return "";
 
       const groups = [
-        { title: "Dead / 404 / DMCA GitHub Repos", filter: it => it.kind === "repo" && it.tier === "missing" },
-        { title: "Archived Repos (New Repo Found)", filter: it => it.kind === "repo" && it.tier === "archived" && it.replacementUrl },
-        { title: "Archived GitHub Repos", filter: it => it.kind === "repo" && it.tier === "archived" && !it.replacementUrl },
-        { title: "Inactive GitHub Repos", filter: it => it.kind === "repo" && !["missing", "archived"].includes(it.tier) },
+        { title: "Dead / 404 / DMCA GitHub Repos", filter: it => it.kind === "repo" && effectiveTier(it) === "missing" },
+        { title: "Archived Repos (New Repo Found)", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && it.replacementUrl },
+        { title: "Archived GitHub Repos", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && !it.replacementUrl },
+        { title: "Inactive GitHub Repos", filter: it => it.kind === "repo" && !["missing", "archived"].includes(effectiveTier(it)) },
         { title: "Dead / Parked Websites", filter: it => it.kind === "site" },
       ];
 
@@ -1284,7 +1737,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           const note = (state.notes[it.id] || "").trim();
           const noteSuffix = note ? ` — *${note}*` : "";
           if (it.kind === "repo") {
-            const srcTag = formatSourceBadge(it.source).short;
+            const tier = effectiveTier(it);
+            const srcTag = formatSourceBadge(it.source).discordTag;
             const webPart = (it.webUrls && it.webUrls.length)
               ? " | Web: " + it.webUrls.map(u => `<${u}>`).join(", ")
               : "";
@@ -1293,17 +1747,30 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
               : "";
             const ageStr = formatAgeHuman(it.inactiveDays);
             const archStr = formatAgeHuman(it.archivedDays);
-            const datePart = it.lastActivityAt ? `, last push ${it.lastActivityAt}` : "";
-            const detail = it.tier === "missing"
-              ? (ageStr ? `${it.reason} — ${ageStr} ago` : it.reason)
-              : (it.tier === "archived"
-                  ? (archStr && it.archivedAt
-                      ? `archived ${archStr} ago (${it.archivedAt})${datePart}`
-                      : `archived${ageStr ? ` — last push ${ageStr} ago${datePart}` : ""}`)
-                  : `${ageStr || (it.inactiveDays + "d")} without updates${datePart}`);
+            let detail;
+            if (tier === "missing") {
+              if (it.isDisabled) {
+                detail = ageStr ? `${it.reason || "Disabled"} — last push ${ageStr} ago` : (it.reason || "Disabled");
+              } else {
+                const seenDate = it.lastActivityAt ? ` (${it.lastActivityAt})` : "";
+                detail = ageStr
+                  ? `${it.reason || "Dead / 404"} — last seen alive ${ageStr} ago${seenDate}`
+                  : (it.reason || "Dead / 404");
+              }
+            } else if (tier === "archived") {
+              const pushDate = it.lastActivityAt ? `, last push ${it.lastActivityAt}` : "";
+              detail = (archStr && it.archivedAt)
+                ? `archived ${archStr} ago (${it.archivedAt})${ageStr ? `, last push ${ageStr} ago` : ""}${pushDate}`
+                : `archived${ageStr ? ` — last push ${ageStr} ago${pushDate}` : ""}`;
+            } else {
+              const pushDate = it.lastActivityAt ? `, last push ${it.lastActivityAt}` : "";
+              detail = ageStr
+                ? `${ageStr} without updates${pushDate}`
+                : (it.reason || "Empty / unknown age");
+            }
             lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.htmlUrl}> [${srcTag}] (${detail})${webPart}${replPart}${noteSuffix}`);
           } else {
-            lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.siteUrl}> (${it.reason})${noteSuffix}`);
+            lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.siteUrl}> (${it.reason || "unhealthy"})${noteSuffix}`);
           }
         }
       }
@@ -1312,8 +1779,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     function renderDiscordOutbox() {
       document.getElementById("discord-preview").value = buildDiscordMarkdown();
-      document.getElementById("wl-count").textContent =
-        `${state.whitelistRepos.size + state.whitelistUrls.size} whitelisted`;
+      updateStatusBarCounts();
     }
 
     function renderAll() {
@@ -1338,16 +1804,22 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       const idx = listBefore.findIndex(x => x.id === it.id);
 
       const targetSet = it.kind === "repo" ? state.whitelistRepos : state.whitelistUrls;
-      if (isWhitelisted(it)) targetSet.delete(it.wlKey);
-      else {
+      if (isWhitelisted(it)) {
+        targetSet.delete(it.wlKey);
+        if (it.origKey) targetSet.delete(it.origKey);
+      } else {
         targetSet.add(it.wlKey);
+        if (it.origKey && it.origKey !== it.wlKey) targetSet.add(it.origKey);
         state.selectedIds.delete(it.id);
       }
+      state.whitelistDirty = true;
       saveLocalState();
 
       const listAfter = filteredAndSortedItems();
       if (listAfter.length > 0 && idx >= 0) {
         state.focusedId = listAfter[Math.min(idx, listAfter.length - 1)].id;
+      } else if (listAfter.length === 0) {
+        state.focusedId = null;
       }
       renderAll();
     }
@@ -1371,13 +1843,14 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         if (state.sortField === field) state.sortAsc = !state.sortAsc;
         else { state.sortField = field; state.sortAsc = field === "title" || field === "repo" || field === "cat"; }
         renderTable();
+        renderInspector();
       };
     });
 
     // Keyboard navigation (Thunderbird shortcuts: Up/Down, Space to tick, J to Junk/Whitelist)
     document.addEventListener("keydown", (e) => {
       const tag = (document.activeElement?.tagName || "").toLowerCase();
-      if (tag === "input" || tag === "textarea") return;
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
 
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -1400,20 +1873,55 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       }
     });
 
-    // Toolbar & Menu bindings
+    // Toolbar, Filter & Live Threshold bindings
     document.getElementById("btn-reload").onclick = () => loadData();
     document.getElementById("btn-toggle-tick").onclick = () => toggleFocusedTick();
     document.getElementById("hdr-tick-btn").onclick = () => toggleFocusedTick();
     document.getElementById("btn-junk-wl").onclick = () => toggleFocusedWhitelist();
     document.getElementById("hdr-wl-btn").onclick = () => toggleFocusedWhitelist();
 
-    document.getElementById("search").oninput = () => { state.page = 0; renderTable(); };
-    document.getElementById("starred-only").onchange = () => { state.page = 0; renderTable(); };
-    document.getElementById("has-web-only").onchange = () => { state.page = 0; renderTable(); };
-    document.getElementById("source-filter").onchange = () => { state.page = 0; renderTable(); };
+    document.getElementById("search").oninput = () => { state.page = 0; renderTable(); renderInspector(); };
+    document.getElementById("starred-only").onchange = () => { state.page = 0; renderTable(); renderInspector(); };
+    document.getElementById("has-web-only").onchange = () => { state.page = 0; renderTable(); renderInspector(); };
+    document.getElementById("source-filter").onchange = () => { state.page = 0; renderTable(); renderInspector(); };
 
-    document.getElementById("prev-pg").onclick = () => { if (state.page > 0) { state.page--; renderTable(); } };
-    document.getElementById("next-pg").onclick = () => { state.page++; renderTable(); };
+    function parseNonNegInt(val, fallback) {
+      const n = parseInt(val, 10);
+      return Number.isFinite(n) && n >= 0 ? n : fallback;
+    }
+
+    function onThresholdsInput() {
+      state.t1 = parseNonNegInt(document.getElementById("thresh-t1").value, 0);
+      state.t2 = parseNonNegInt(document.getElementById("thresh-t2").value, 0);
+      state.t3 = parseNonNegInt(document.getElementById("thresh-t3").value, 0);
+      state.minDays = parseNonNegInt(document.getElementById("min-days").value, 0);
+      state.thresholdsCustomized = true;
+      state.page = 0;
+      renderAll();
+    }
+
+    document.getElementById("thresh-t1").oninput = onThresholdsInput;
+    document.getElementById("thresh-t2").oninput = onThresholdsInput;
+    document.getElementById("thresh-t3").oninput = onThresholdsInput;
+    document.getElementById("min-days").oninput = onThresholdsInput;
+
+    document.getElementById("btn-reset-thresh").onclick = () => {
+      state.t1 = state.reportDefaults.t1;
+      state.t2 = state.reportDefaults.t2;
+      state.t3 = state.reportDefaults.t3;
+      state.minDays = 0;
+      state.thresholdsCustomized = false;
+      state.page = 0;
+      syncThresholdInputs();
+      renderAll();
+    };
+
+    document.getElementById("prev-pg").onclick = () => {
+      if (state.page > 0) { state.page--; renderTable(); renderInspector(); }
+    };
+    document.getElementById("next-pg").onclick = () => {
+      state.page++; renderTable(); renderInspector();
+    };
 
     document.getElementById("menu-tick-page").onclick = () => {
       const all = filteredAndSortedItems();
@@ -1451,6 +1959,38 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       a.click();
     };
 
+    function splitDiscordChunks(content, maxLen = 1900) {
+      const pieces = [];
+      for (const rawLine of content.split("\n")) {
+        let rem = rawLine;
+        while (rem.length > maxLen) {
+          let cut = rem.lastIndexOf(" ", maxLen);
+          if (cut <= 200) cut = maxLen;
+          pieces.push(rem.slice(0, cut));
+          rem = rem.slice(cut).trimStart();
+        }
+        pieces.push(rem);
+      }
+
+      const chunks = [];
+      let cur = "";
+      for (const line of pieces) {
+        const cand = cur ? `${cur}\n${line}` : line;
+        if (cand.length > maxLen && cur) {
+          chunks.push(cur);
+          cur = line;
+        } else {
+          cur = cand;
+        }
+      }
+      if (cur) chunks.push(cur);
+      return chunks;
+    }
+
+    function sleepMs(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
     async function sendToDiscord() {
       const webhook = document.getElementById("webhook-url").value.trim();
       const content = document.getElementById("discord-preview").value.trim();
@@ -1458,27 +1998,38 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       if (!content) { setStatus("Tick at least one entry first."); return; }
       localStorage.setItem("fmhy_discord_webhook", webhook);
 
-      const chunks = [];
-      let cur = "";
-      for (const line of content.split("\n")) {
-        if ((cur + "\n" + line).length > 1920 && cur) {
-          chunks.push(cur);
-          cur = line;
-        } else {
-          cur = cur ? (cur + "\n" + line) : line;
-        }
-      }
-      if (cur) chunks.push(cur);
-
+      const chunks = splitDiscordChunks(content, 1900);
       setStatus(`Sending ${chunks.length} message(s) to Discord...`);
       try {
-        for (const chunk of chunks) {
-          const r = await fetch(webhook, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ content: chunk, flags: 4 }),
-          });
-          if (!r.ok) throw new Error(`Discord HTTP ${r.status}`);
+        for (let i = 0; i < chunks.length; i++) {
+          if (i > 0) await sleepMs(350);
+          let delivered = false;
+          for (let attempt = 0; attempt < 4; attempt++) {
+            const r = await fetch(webhook, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: chunks[i], flags: 4 }),
+            });
+            if (r.status === 429 && attempt < 3) {
+              let retryAfterSec = NaN;
+              try {
+                const body = await r.json();
+                if (body && typeof body.retry_after === "number") retryAfterSec = body.retry_after;
+              } catch {}
+              if (!Number.isFinite(retryAfterSec)) {
+                const hdr = parseFloat(r.headers.get("Retry-After") || "");
+                retryAfterSec = Number.isFinite(hdr) ? hdr : 2.0;
+              }
+              const waitMs = Math.ceil(Math.min(Math.max(retryAfterSec, 0.35), 30) * 1000);
+              setStatus(`Discord HTTP 429 — waiting ${(waitMs / 1000).toFixed(1)}s before retrying chunk ${i + 1}/${chunks.length}...`);
+              await sleepMs(waitMs);
+              continue;
+            }
+            if (!r.ok) throw new Error(`Discord HTTP ${r.status}`);
+            delivered = true;
+            break;
+          }
+          if (!delivered) throw new Error("Discord rate limit exceeded after retries");
         }
         setStatus(`Sent ${chunks.length} message(s) to Discord.`);
       } catch (err) {
@@ -1491,7 +2042,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     async function openWhitelistEditor() {
       await navigator.clipboard.writeText(buildWhitelistJson());
       setStatus("Copied whitelist.json to clipboard — opening GitHub editor...");
-      window.open(`https://github.com/${REPO_SLUG}/edit/main/whitelist.json`, "_blank");
+      window.open(`https://github.com/${REPO_SLUG}/edit/main/whitelist.json`, "_blank", "noopener,noreferrer");
     }
     document.getElementById("copy-wl-btn").onclick = openWhitelistEditor;
     document.getElementById("menu-copy-wl").onclick = openWhitelistEditor;
@@ -1509,13 +2060,24 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         const headers = {
           "Accept": "application/vnd.github+json",
           "Authorization": `Bearer ${pat}`,
+          "X-GitHub-Api-Version": "2022-11-28",
         };
         let sha = undefined;
-        const curResp = await fetch(apiUrl, { headers });
+        const curResp = await fetch(apiUrl, { headers, cache: "no-store" });
         if (curResp.ok) {
           const curData = await curResp.json();
           sha = curData.sha;
+        } else if (curResp.status === 401 || curResp.status === 403) {
+          let detail = "";
+          try {
+            const errJson = await curResp.json();
+            if (errJson && errJson.message) detail = `: ${errJson.message}`;
+          } catch {}
+          throw new Error(`GitHub auth error HTTP ${curResp.status}${detail}`);
+        } else if (curResp.status !== 404) {
+          throw new Error(`GitHub GET whitelist.json failed (HTTP ${curResp.status})`);
         }
+
         const jsonBytes = new TextEncoder().encode(buildWhitelistJson());
         let binary = "";
         jsonBytes.forEach(b => binary += String.fromCharCode(b));
@@ -1523,6 +2085,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
         const putResp = await fetch(apiUrl, {
           method: "PUT",
+          cache: "no-store",
           headers: { ...headers, "Content-Type": "application/json" },
           body: JSON.stringify({
             message: "Update whitelist.json via triage UI",
@@ -1530,7 +2093,17 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             ...(sha ? { sha } : {}),
           }),
         });
-        if (!putResp.ok) throw new Error(`GitHub API HTTP ${putResp.status}`);
+        if (!putResp.ok) {
+          let putDetail = "";
+          try {
+            const errJson = await putResp.json();
+            if (errJson && errJson.message) putDetail = `: ${errJson.message}`;
+          } catch {}
+          throw new Error(`GitHub API HTTP ${putResp.status}${putDetail}`);
+        }
+        state.whitelistDirty = false;
+        saveLocalState();
+        renderAll();
         setStatus("Committed whitelist.json to main.");
       } catch (err) {
         setStatus(`Commit failed: ${err.message}`);

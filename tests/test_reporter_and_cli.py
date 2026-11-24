@@ -24,9 +24,11 @@ from fmhy_drift.models import (
 )
 from fmhy_drift.reporter import (
     build_discord_payload,
+    format_duration_human,
     render_json_report,
     render_markdown_report,
     send_discord_webhook,
+    summarize_report,
 )
 from fmhy_drift.whitelist import load_whitelist
 
@@ -208,3 +210,224 @@ def test_dead_vs_archived_separation_and_attached_links(tmp_path: Path) -> None:
         )
     )
     assert len(captured) == 1
+
+
+def test_duration_364d_wayback_dead_label_and_json_fields() -> None:
+    # 364d must NEVER format as "12m 4d (364d)"!
+    assert format_duration_human(364) == "11m 34d (364d)"
+    assert format_duration_human(360) == "11m 30d (360d)"
+    assert format_duration_human(365) == "1y (365d)"
+    assert format_duration_human(729) == "1y 11m (729d)"
+
+    wb_entry = WikiEntry(
+        entry_id="tools.md:10",
+        title="WaybackDead",
+        category="Tools",
+        subcategory="",
+        source_file="tools.md",
+        line_number=10,
+        starred=False,
+        site_urls=[],
+        github_refs=[GitHubRef("gone", "oldrepo", "explicit_markdown")],
+        raw_line="* [WaybackDead](https://github.com/gone/oldrepo)",
+    )
+    renamed_entry = WikiEntry(
+        entry_id="tools.md:11",
+        title="RenamedPages",
+        category="Tools",
+        subcategory="",
+        source_file="tools.md",
+        line_number=11,
+        starred=False,
+        site_urls=["https://alice.github.io/old-slug/"],
+        github_refs=[GitHubRef("alice", "old-slug", "github_pages")],
+        raw_line="* [RenamedPages](https://alice.github.io/old-slug/)",
+    )
+    report = DriftReport(
+        generated_at=datetime(2026, 11, 24, 12, 0, 0, tzinfo=UTC),
+        index_source="tools.md",
+        thresholds=TierThresholds(90, 180, 365),
+        proxy_verification=None,
+        entries=[
+            EntryDriftResult(
+                entry=wb_entry,
+                all_github_refs=list(wb_entry.github_refs),
+                repo_results=[
+                    RepoActivityResult(
+                        owner="gone",
+                        repo="oldrepo",
+                        tier=StalenessTier.MISSING,
+                        last_activity_at=datetime(2023, 5, 1, 0, 0, 0, tzinfo=UTC),
+                        inactive_days=1303,
+                        reason="Repository not found or private (HTTP 404) — last archived alive 2023-05-01",
+                    )
+                ],
+            ),
+            EntryDriftResult(
+                entry=renamed_entry,
+                all_github_refs=list(renamed_entry.github_refs),
+                repo_results=[
+                    RepoActivityResult(
+                        owner="alice",
+                        repo="old-slug",
+                        canonical_full_name="alice/real-repo",
+                        tier=StalenessTier.TIER_3_CRITICAL,
+                        inactive_days=500,
+                        reason="No push/commit/release for 500 days (resolved -> alice/real-repo)",
+                    )
+                ],
+            ),
+        ],
+        unique_sites_checked=0,
+        unique_repos_checked=2,
+    )
+
+    md = render_markdown_report(report)
+    assert "[Listed in FMHY]" in md
+    assert "[Guessed: github.io (not in FMHY)]" in md
+    assert "last seen alive" in md
+    assert "without updates, last push `2023-05-01`" not in md
+
+    parsed = json.loads(render_json_report(report))
+    assert parsed["entries"][0]["raw_line"] == "* [WaybackDead](https://github.com/gone/oldrepo)"
+    assert parsed["entries"][1]["raw_line"] == "* [RenamedPages](https://alice.github.io/old-slug/)"
+    repo_json = parsed["entries"][1]["github_repos"][0]
+    assert repo_json["full_name"] == "alice/real-repo"
+    assert repo_json["requested_full_name"] == "alice/old-slug"
+
+    # Non-JSON 429 response in send_discord_webhook must not crash on resp.json()
+    attempts = 0
+
+    def rate_limit_handler(req: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "0.01"}, text="<html>Rate limited</html>")
+        return httpx.Response(204)
+
+    asyncio.run(
+        send_discord_webhook(
+            "https://discord.com/api/webhooks/123/token",
+            report,
+            transport=httpx.MockTransport(rate_limit_handler),
+        )
+    )
+    assert attempts == 2
+
+
+def test_cli_3dash_deduplication_and_canonical_whitelist_roundtrip(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    wl_file = tmp_path / "whitelist.json"
+    wl_file.write_text(
+        json.dumps(
+            {
+                "repos": ["CanonOrg/WhitelistedTarget"],
+                "urls": ["HTTPS://Example.COM/Some/Path/#frag"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    wl = load_whitelist(wl_file)
+    assert wl.is_url_whitelisted("https://example.com/Some/Path")
+    assert wl.is_url_whitelisted("https://EXAMPLE.com/Some/Path/#other")
+
+    md_in = tmp_path / "gaming.md"
+    md_in.write_text(
+        "# Gaming\n"
+        "* [3Dash](https://deluge-team.github.io/3Dash/) / [Editor](https://deluge-team.github.io/3Dash-Editor/)\n"
+        "* [MixedSource](https://mixed.github.io/demo/) / [GitHub](https://github.com/mixed/real-demo)\n"
+        "* [RenamedWL](https://oldalias.github.io/app/)\n",
+        encoding="utf-8",
+    )
+
+    async def fake_check_repos(self, refs: list[GitHubRef]) -> dict[str, RepoActivityResult]:
+        return {
+            "deluge-team/3dash": RepoActivityResult(
+                owner="deluge-team",
+                repo="3Dash",
+                canonical_full_name="deluge-team/deluge-team.github.io",
+                tier=StalenessTier.TIER_2_WARNING,
+                inactive_days=200,
+                reason="No push/commit/release for 200 days (resolved -> deluge-team/deluge-team.github.io)",
+            ),
+            "deluge-team/3dash-editor": RepoActivityResult(
+                owner="deluge-team",
+                repo="3Dash-Editor",
+                canonical_full_name="deluge-team/deluge-team.github.io",
+                tier=StalenessTier.TIER_2_WARNING,
+                inactive_days=200,
+                reason="No push/commit/release for 200 days (resolved -> deluge-team/deluge-team.github.io)",
+            ),
+            "mixed/demo": RepoActivityResult(
+                owner="mixed",
+                repo="demo",
+                canonical_full_name="mixed/real-demo",
+                tier=StalenessTier.TIER_1_NOTICE,
+                inactive_days=100,
+                reason="No push/commit/release for 100 days (resolved -> mixed/real-demo)",
+            ),
+            "mixed/real-demo": RepoActivityResult(
+                owner="mixed",
+                repo="real-demo",
+                canonical_full_name="mixed/real-demo",
+                tier=StalenessTier.TIER_1_NOTICE,
+                inactive_days=100,
+                reason="No push/commit/release for 100 days",
+            ),
+            "oldalias/app": RepoActivityResult(
+                owner="oldalias",
+                repo="app",
+                canonical_full_name="CanonOrg/WhitelistedTarget",
+                tier=StalenessTier.ARCHIVED,
+                is_archived=True,
+                inactive_days=800,
+                reason="Repository archived (resolved -> CanonOrg/WhitelistedTarget)",
+            ),
+        }
+
+    monkeypatch.setattr("fmhy_drift.cli.GitHubActivityChecker.check_repos", fake_check_repos)
+
+    md_out = tmp_path / "out.md"
+    json_out = tmp_path / "out.json"
+    html_out = tmp_path / "index.html"
+
+    rc = main(
+        [
+            "--github-only",
+            "--whitelist",
+            str(wl_file),
+            "--input",
+            str(md_in),
+            "--markdown-out",
+            str(md_out),
+            "--json-out",
+            str(json_out),
+            "--html-out",
+            str(html_out),
+        ]
+    )
+    assert rc == 0
+
+    data = json.loads(json_out.read_text(encoding="utf-8"))
+    # Canonical whitelist matched `CanonOrg/WhitelistedTarget`, skipping `RenamedWL` and counting it!
+    assert data["summary"]["whitelisted_repos_skipped"] == 1
+    titles = [e["title"] for e in data["entries"]]
+    assert "RenamedWL" not in titles
+
+    # 3Dash has only ONE deduplicated repo entry despite two `.github.io` subpaths resolving to one repo!
+    dash_entry = next(e for e in data["entries"] if e["title"] == "3Dash")
+    assert len(dash_entry["github_repos"]) == 1
+    assert dash_entry["github_repos"][0]["full_name"] == "deluge-team/deluge-team.github.io"
+    assert dash_entry["github_repos"][0]["requested_full_name"] == "deluge-team/3Dash"
+
+    # MixedSource deduplicated `mixed/demo` (github_pages) + `mixed/real-demo` (explicit_markdown) -> kept explicit_markdown!
+    mixed_entry = next(e for e in data["entries"] if e["title"] == "MixedSource")
+    assert len(mixed_entry["github_repos"]) == 1
+    assert mixed_entry["github_repos"][0]["source"] == "explicit_markdown"
+    assert mixed_entry["github_repos"][0]["requested_full_name"] == "mixed/real-demo"
+
+    # summarize_report also deduplicates by canonical full_name.lower()
+    assert data["summary"]["repos_tier2_warning"] == 1
+    assert data["summary"]["repos_tier1_notice"] == 1

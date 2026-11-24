@@ -119,6 +119,61 @@ def test_abztract_and_blobs_multi_tool_line_and_dotted_pages_repo() -> None:
     assert blobs.github_refs[0].source == "github_pages"
 
 
+def test_prowlarr_bobarr_openconnect_and_ffmpeg_real_fmhy_lines() -> None:
+    md = """# ► Torrents & VPN
+## ▷ Clients
+* ⭐ **[Prowlarr](https://github.com/Prowlarr/Prowlarr)**, **[Jackett](https://github.com/Jackett/Jackett)**, [Bobarr](https://github.com/iam4x/bobarr) / [Discord](https://discord.gg/PFwM4zk), [nefarious](https://lardbit.github.io/nefarious/) or [Watcher](https://nosmokingbandit.github.io/) - Autodownload Torrents
+* [OpenConnect](https://gitlab.com/openconnect/openconnect) - SSL VPN / [GUI](https://openconnect.github.io/openconnect-gui/)
+* [FFmpeg Cheat Sheet](https://gist.github.com/steven2358/ba153c642fe2bb1e47485962df07c730), [FFmpeg Commander](https://ffmpeg-commander.com/) or [FFmpeg Buddy](https://evanhahn.github.io/ffmpeg-buddy/) - Command Lists
+* ⭐ **[Stability Matrix](https://lykos.ai/)** / [Discord](https://discord.com/invite/TUrgfECxHz) / [GitHub](https://github.com/LykosAI/StabilityMatrix)
+* ⭐ **[SponsorBlock](https://sponsor.ajay.app/)** - Skip YouTube Sponsors / [GitHub](https://github.com/ajayyy/SponsorBlock) / [Warning](https://github.com/arkenfox/user.js/issues/1729#issuecomment-1)
+* **Note** - Remember to [bind](https://wispydocs.pages.dev/torrenting/) your VPN
+* GetIntoPC - Caught with [malware](https://www.virustotal.com/gui/file/abc)
+"""
+    entries = parse_markdown_content(md, source_file="torrenting.md")
+    by_title = {e.title: e for e in entries}
+
+    # Heading `►` and `▷` prefixes stripped cleanly!
+    assert by_title["Prowlarr"].category == "Torrents & VPN"
+    assert by_title["Prowlarr"].subcategory == "Clients"
+
+    # Prowlarr and Bobarr are completely separate entries, and only bolded Prowlarr/Jackett are starred!
+    assert by_title["Prowlarr"].starred is True
+    assert [r.full_name for r in by_title["Prowlarr"].github_refs] == ["Prowlarr/Prowlarr"]
+    assert by_title["Prowlarr"].site_urls == []
+
+    assert by_title["Jackett"].starred is True
+    assert [r.full_name for r in by_title["Jackett"].github_refs] == ["Jackett/Jackett"]
+
+    assert by_title["Bobarr"].starred is False
+    assert [r.full_name for r in by_title["Bobarr"].github_refs] == ["iam4x/bobarr"]
+
+    # Stability Matrix keeps its GitHub link instead of losing it to `/ [Discord]`!
+    assert "Discord" not in by_title
+    assert [r.full_name for r in by_title["Stability Matrix"].github_refs] == [
+        "LykosAI/StabilityMatrix"
+    ]
+
+    # SponsorBlock keeps ONLY explicit `ajayyy/SponsorBlock` (drops `ajay/sponsor` heuristic AND issue citation)!
+    assert [r.full_name for r in by_title["SponsorBlock"].github_refs] == ["ajayyy/SponsorBlock"]
+    assert "SponsorBlock (Warning)" not in by_title
+
+    # Note callout and Unsafe prose lines are ignored!
+    assert "bind" not in by_title
+    assert "malware" not in by_title
+
+    # OpenConnect main link stays GitLab; `/ [GUI](openconnect-gui)` becomes `OpenConnect (GUI)`!
+    assert by_title["OpenConnect"].github_refs == []
+    assert by_title["OpenConnect"].site_urls == ["https://gitlab.com/openconnect/openconnect"]
+    assert [r.full_name for r in by_title["OpenConnect (GUI)"].github_refs] == [
+        "openconnect/openconnect-gui"
+    ]
+
+    # FFmpeg Buddy is its own entry, not merged under FFmpeg Cheat Sheet!
+    assert "FFmpeg Cheat Sheet" not in by_title
+    assert [r.full_name for r in by_title["FFmpeg Buddy"].github_refs] == ["evanhahn/ffmpeg-buddy"]
+
+
 def test_load_local_index_directory(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()

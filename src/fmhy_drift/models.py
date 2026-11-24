@@ -75,6 +75,7 @@ class GitHubRef:
     repo: str
     source: GitHubRefSource
     discovered_from_url: str | None = None
+    entry_title: str | None = None
 
     @property
     def full_name(self) -> str:
