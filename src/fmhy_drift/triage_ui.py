@@ -636,6 +636,38 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       margin-top: 6px;
     }
     .tb-repl-title { color: #0b6b24; }
+    .vuln-pill {
+      display: inline-block;
+      padding: 0 5px;
+      border-radius: 2px;
+      font-size: 10px;
+      font-weight: 700;
+      margin-left: 4px;
+      border: 1px solid #b62324;
+      background: #ffebe9;
+      color: #a40e26;
+    }
+    html.dark .vuln-pill {
+      background: #491217;
+      border-color: #f85149;
+      color: #ffa198;
+    }
+    tr.selected .vuln-pill {
+      background: #b62324 !important;
+      border-color: #ffffff !important;
+      color: #ffffff !important;
+    }
+    .tb-vuln-box {
+      background: #fff0ee;
+      border: 1px solid #e58e8a;
+      padding: 5px 7px;
+      margin-top: 6px;
+    }
+    html.dark .tb-vuln-box {
+      background: #331317;
+      border-color: #cf3b37;
+      color: #ffdcd7;
+    }
 
     /* Classic Dark Thunderbird XUL Theme (default) */
     html.dark, html.dark body {
@@ -1159,6 +1191,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       return [
         { id: "inbox_all", label: "Inbox (All Flagged)", icon: "inbox", tip: "All non-whitelisted dead, archived, dead-site, and inactive (>= Notice threshold) entries" },
         { id: "missing", label: "Dead / 404 Repos", icon: "inbox", tip: "404, DMCA 451, or disabled GitHub repositories" },
+        { id: "severe_vulns", label: "Severe Vulns (Crit/High)", icon: "vuln", tip: "Stale or archived repositories with HIGH or CRITICAL vulnerabilities (OSV.dev)" },
         { id: "archived_moved", label: "Archived — Moved", icon: "moved", tip: "Archived repositories with a detected replacement repository link" },
         { id: "archived", label: "All Archived", icon: "folder", tip: "All archived GitHub repositories" },
         { id: "tier3_critical", label: `Inactive >=${state.t3}d`, icon: "folder", tip: `Critical inactivity tier: >= ${state.t3} days since last push/release` },
@@ -1206,6 +1239,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       }
       if (type === "junk") {
         return `<svg class="tb-folder-icon" viewBox="0 0 16 16"><path d="M9 1.5s.6 2.2-1 3.7c-1.2 1.1-1.4 2.2-.8 3.2-1.2-.4-1.8-1.5-1.6-2.8C4 6.8 3.5 8.8 4.3 10.8 5.2 13 7.1 14.5 9 14.5c2.4 0 4.1-1.8 4.1-4.2 0-2.8-1.9-4.3-1.9-4.3s.1 1.5-.9 2.1c.4-2.1-.3-4.5-1.3-6.6z" fill="#f2791a" stroke="#9d3f00" stroke-width="0.9"/></svg>`;
+      }
+      if (type === "vuln") {
+        return `<svg class="tb-folder-icon" viewBox="0 0 16 16"><path d="M8 1.5l5.5 2.2v4.1c0 3.5-2.3 6.2-5.5 7.2-3.2-1-5.5-3.7-5.5-7.2V3.7L8 1.5z" fill="#e03e36" stroke="#871914"/><path d="M8 4.5v4.2M8 10.8v1" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>`;
       }
       return `<svg class="tb-folder-icon" viewBox="0 0 16 16"><path d="M1 3h5l1.5 2H15v9H1V3z" fill="#f4d47c" stroke="#a68121"/></svg>`;
     }
@@ -1485,6 +1521,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             reason: rr.reason || "",
             replacementUrl: rr.replacement_url || null,
             replacementStatus: rr.replacement_status || null,
+            vulns: Array.isArray(rr.vulns) ? rr.vulns : [],
             webUrls: mergedWeb,
           });
         }
@@ -1541,6 +1578,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       return state.items.filter(it => {
         if (isWhitelisted(it)) return false;
         const tier = effectiveTier(it);
+        if (folderId === "severe_vulns") return it.kind === "repo" && tier !== "active" && it.vulns && it.vulns.length > 0;
         if (folderId === "archived_moved") return it.kind === "repo" && tier === "archived" && Boolean(it.replacementUrl);
         if (folderId === "dead_sites") return it.kind === "site";
         return it.kind === "repo" && tier === folderId;
@@ -1562,7 +1600,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         if (srcMode === "heuristic" && (it.kind !== "repo" || it.source === "explicit_markdown")) return false;
         if (minDays > 0 && (it.inactiveDays == null || it.inactiveDays < minDays)) return false;
         if (!q) return true;
-        const hay = `${it.title} ${it.catLabel} ${it.fullName || ""} ${it.requestedFullName || ""} ${it.siteUrl || ""} ${it.replacementUrl || ""} ${it.source || ""} ${it.rawLine || ""} ${(it.webUrls || []).join(" ")}`.toLowerCase();
+        const vulnHay = (it.vulns || []).map(v => `${v.vuln_id} ${v.package_name || ""} ${v.summary || ""}`).join(" ");
+        const hay = `${it.title} ${it.catLabel} ${it.fullName || ""} ${it.requestedFullName || ""} ${it.siteUrl || ""} ${it.replacementUrl || ""} ${it.source || ""} ${it.rawLine || ""} ${(it.webUrls || []).join(" ")} ${vulnHay}`.toLowerCase();
         return hay.includes(q);
       });
 
@@ -1758,11 +1797,18 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           : { short: "✓ In FMHY", full: "✅ Website URL directly in FMHY listing", isHeur: false };
         const srcCellHtml = `<span class="src-pill${srcInfo.isHeur ? " heur" : ""}" title="${escapeHtml(srcInfo.full)}">${escapeHtml(srcInfo.short)}</span>`;
 
+        let vulnBadgeHtml = "";
+        if (it.vulns && it.vulns.length > 0) {
+          const critCnt = it.vulns.filter(v => v.severity === "CRITICAL").length;
+          const badgeTxt = critCnt > 0 ? `🛡️ ${critCnt} CRIT` : `🛡️ ${it.vulns.length} HIGH`;
+          vulnBadgeHtml = `<span class="vuln-pill" title="${escapeHtml(it.vulns.map(v => v.vuln_id + ' (' + v.severity + '): ' + v.summary).join(' | '))}">${escapeHtml(badgeTxt)}</span>`;
+        }
+
         tr.innerHTML = `
           <td class="col-cb"><input type="checkbox" class="row-cb" ${isTicked ? "checked" : ""} /></td>
           <td class="col-star">${it.starred ? '<span class="star-on">★</span>' : '<span class="star-off">•</span>'}</td>
           <td class="col-clip">${hasClip ? "📎" : ""}</td>
-          <td class="col-subject" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}</td>
+          <td class="col-subject" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}${vulnBadgeHtml}</td>
           <td class="col-repo" title="${escapeHtml(it.fullName || it.siteUrl || "")}">${repoCellHtml}</td>
           <td class="col-src">${srcCellHtml}</td>
           <td class="col-web">${formatWebCell(it)}</td>
@@ -1890,6 +1936,17 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         </div>`;
       }
 
+      if (it.vulns && it.vulns.length > 0) {
+        const vRows = it.vulns.map(v => {
+          const pkg = v.package_name ? ` <code>${escapeHtml(v.package_name)}</code>` : " <em>(repo commit)</em>";
+          const link = v.advisory_url ? renderSafeLink(v.advisory_url, v.vuln_id, "", false) : `<strong>${escapeHtml(v.vuln_id)}</strong>`;
+          return `&bull; <strong>[${escapeHtml(v.severity)}]</strong> ${link}${pkg} &mdash; ${escapeHtml(v.summary || "")}`;
+        }).join("<br/>");
+        detailsHtml += `<div class="tb-detail-row tb-vuln-box">
+          <strong>🛡️ Severe Vulnerabilities (${it.vulns.length}):</strong><br/>${vRows}
+        </div>`;
+      }
+
       const hasRawLine = Boolean(it.rawLine && it.rawLine.trim());
       detailsHtml += `
         <div class="tb-raw-line-hdr">
@@ -1958,6 +2015,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             const replPart = it.replacementUrl
               ? ` | -> New Repo: <${it.replacementUrl}>${it.replacementStatus ? ` (${it.replacementStatus})` : ""}`
               : "";
+            const vulnPart = (it.vulns && it.vulns.length)
+              ? " | 🛡️ Vulns: " + it.vulns.slice(0, 3).map(v => `${v.vuln_id} (${v.severity}${v.package_name ? " " + v.package_name : ""})`).join(", ")
+              : "";
             const ageStr = formatAgeHuman(it.inactiveDays);
             const archStr = formatAgeHuman(it.archivedDays);
             let detail;
@@ -1981,7 +2041,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
                 ? `${ageStr} without updates${pushDate}`
                 : (it.reason || "Empty / unknown age");
             }
-            lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.htmlUrl}> [${srcTag}] (${detail})${webPart}${replPart}${noteSuffix}`);
+            lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.htmlUrl}> [${srcTag}] (${detail})${webPart}${replPart}${vulnPart}${noteSuffix}`);
           } else {
             lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.siteUrl}> (${it.reason || "unhealthy"})${noteSuffix}`);
           }

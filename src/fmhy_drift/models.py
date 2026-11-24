@@ -127,9 +127,20 @@ class SiteCheckResult:
         }
 
 
+@dataclass(frozen=True)
+class RepoVuln:
+    """High or Critical vulnerability affecting a stale/archived repo or its dependencies."""
+
+    vuln_id: str
+    severity: Literal["CRITICAL", "HIGH"]
+    summary: str
+    package_name: str | None = None
+    advisory_url: str = ""
+
+
 @dataclass
 class RepoActivityResult:
-    """Activity, archival, homepage, and replacement check outcome for a GitHub repo."""
+    """Activity, archival, homepage, replacement, and vulnerability check outcome for a repo."""
 
     owner: str
     repo: str
@@ -141,11 +152,13 @@ class RepoActivityResult:
     is_archived: bool = False
     is_disabled: bool = False
     latest_release_tag: str | None = None
+    head_commit_oid: str | None = None
     canonical_full_name: str | None = None
     homepage_url: str | None = None
     description: str = ""
     replacement_url: str | None = None
     replacement_status: str | None = None
+    vulns: list[RepoVuln] = field(default_factory=list)
     reason: str = ""
 
     @property

@@ -2,9 +2,9 @@
 
 Checks the [FMHY](https://fmhy.net) index (`api.fmhy.net/single-page`) for dead sites and dead, archived, or inactive GitHub repositories.
 
-- **Triage & Discord Report UI**: [melo-foundation.github.io/fmhy-drift](https://melo-foundation.github.io/fmhy-drift/) — filter by Dead (`404`/`451`/disabled), Archived (with auto-detected replacement repo links), or `90` / `180` / `365`d inactive; tick items to send a curated report to a Discord webhook; and save false positives to [`whitelist.json`](whitelist.json).
-- **GitHub check**: Queries linked `github.com` repos (plus repos inferred from `*.github.io`, `raw.githubusercontent.com`, `jsdelivr`, `githack`, and `statically` URLs) via batched GraphQL, attaches website/GitHub Pages links, and scans archived repo descriptions/READMEs for successor links.
-- **Site liveness check**: Only runs when `PROXY_URL` is set, verifying egress IP differs from the runner IP before scanning.
+- **Triage & Discord Report UI**: [melo-foundation.github.io/fmhy-drift](https://melo-foundation.github.io/fmhy-drift/) — filter by Dead (`404`/`451`/disabled), Archived (with auto-detected replacement repo links), Severe Vulns (`CRITICAL`/`HIGH`), Dead/Parked DNS, or custom `> X` days inactive; tick items to send a curated report to a Discord webhook; and save false positives to [`whitelist.json`](whitelist.json).
+- **GitHub & OSV check**: Queries linked `github.com` repos (plus repos inferred from `*.github.io`, `raw.githubusercontent.com`, `jsdelivr`, `githack`, and `statically` URLs) via batched GraphQL, scans archived repo descriptions/READMEs for successor links, and checks stale/archived repos + root manifests against [OSV.dev](https://osv.dev) for unpatched `HIGH`/`CRITICAL` advisories.
+- **Site liveness & DNS check**: Direct HTTP site scraping only runs when `PROXY_URL` is set (verifying egress IP differs from the runner IP); otherwise, a proxy-free Cloudflare + Google DoH check flags `NXDOMAIN`, sinkholed, and parked domains without contacting target hosts.
 
 ## GitHub Actions
 

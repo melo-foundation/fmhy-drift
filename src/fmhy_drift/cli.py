@@ -42,6 +42,7 @@ from fmhy_drift.reporter import (
 )
 from fmhy_drift.site_checker import SiteChecker, filter_discovered_for_entry
 from fmhy_drift.triage_ui import TRIAGE_HTML
+from fmhy_drift.vuln_checker import RepoVulnChecker
 from fmhy_drift.whitelist import load_whitelist
 
 
@@ -89,6 +90,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Run proxy-free Cloudflare/Google DoH dead-domain checks when HTTP proxy is not used (default: enabled unless --github-only).",
+    )
+    parser.add_argument(
+        "--vuln-check",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Check stale and archived GitHub repositories for HIGH/CRITICAL vulnerabilities via OSV.dev (default: enabled).",
     )
     parser.add_argument(
         "--whitelist",
@@ -411,6 +418,17 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         proxy_url=proxy_url if (args.proxy_github and proxy_url) else None,
     )
     repo_results_map = await gh_checker.check_repos(combined_refs_for_api)
+
+    if args.vuln_check and repo_results_map:
+        print(
+            "Scanning stale & archived repositories for HIGH/CRITICAL vulnerabilities (OSV.dev)...",
+            flush=True,
+        )
+        vuln_checker = RepoVulnChecker(
+            github_token=args.github_token or None,
+            min_inactive_days=thresholds.tier1_days,
+        )
+        repo_results_map = await vuln_checker.enrich_repo_vulns(repo_results_map)
 
     # 6. Assemble DriftReport (dropping unverified speculative `domain_heuristic` guesses)
     entry_results: list[EntryDriftResult] = []

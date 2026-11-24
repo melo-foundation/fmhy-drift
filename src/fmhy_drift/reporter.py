@@ -41,6 +41,7 @@ class ReportSummary:
     repos_tier3_critical: int
     repos_archived: int
     repos_archived_with_replacement: int
+    repos_with_severe_vulns: int
     repos_missing: int
     repos_error: int
     newly_discovered_github_links: int
@@ -88,6 +89,7 @@ def summarize_report(report: DriftReport) -> ReportSummary:
         repos_archived_with_replacement=sum(
             1 for r in repo_vals if r.tier == StalenessTier.ARCHIVED and r.replacement_url
         ),
+        repos_with_severe_vulns=sum(1 for r in repo_vals if r.vulns),
         repos_missing=sum(1 for r in repo_vals if r.tier == StalenessTier.MISSING),
         repos_error=sum(1 for r in repo_vals if r.tier == StalenessTier.ERROR),
         newly_discovered_github_links=newly_discovered_count,
@@ -165,6 +167,18 @@ def _format_replacement_inline(rr: RepoActivityResult) -> str:
     return f" | 🔀 **New Repo:** <{rr.replacement_url}>{status}"
 
 
+def _format_vulns_inline(rr: RepoActivityResult) -> str:
+    if not rr.vulns:
+        return ""
+    items = []
+    for v in rr.vulns[:3]:
+        pkg_txt = f" in `{v.package_name}`" if v.package_name else ""
+        link = f"[{v.vuln_id}]({v.advisory_url})" if v.advisory_url else v.vuln_id
+        items.append(f"{link} ({v.severity}{pkg_txt})")
+    more = f" +{len(rr.vulns) - 3} more" if len(rr.vulns) > 3 else ""
+    return " | 🛡️ **Vulns:** " + ", ".join(items) + more
+
+
 def render_markdown_report(report: DriftReport, *, pages_url: str | None = None) -> str:
     """Render a human-readable Markdown report organized into Dead vs. Archived vs. Stale."""
     summary = summarize_report(report)
@@ -238,6 +252,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
             f"| Unique GitHub Repos Checked | {summary.unique_repos_checked} |",
             f"| 🟢 Repos Active (`< {t.tier1_days}d`) | {summary.repos_active} |",
             f"| 💀 Dead GitHub Repos (404 / DMCA / Disabled) | {summary.repos_missing} |",
+            f"| 🛡️ Old/Archived Repos With Severe Vulns (HIGH/CRIT) | {summary.repos_with_severe_vulns} |",
             f"| 📦 Archived GitHub Repos | {summary.repos_archived} _(🔀 {summary.repos_archived_with_replacement} w/ replacement link)_ |",
             f"| 🔴 Tier 3 Critical (`>= {t.tier3_days}d` inactive) | {summary.repos_tier3_critical} |",
             f"| 🟠 Tier 2 Warning (`{t.tier2_days}–{t.tier3_days - 1}d` inactive) | {summary.repos_tier2_warning} |",
@@ -329,7 +344,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                     lines.append(
                         f"  - 📦 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {arch_str}"
                         f"last push **{format_duration_human(rr.inactive_days)}** ago (`{last_str}`)"
-                        f"{web_str}{repl_str}"
+                        f"{web_str}{repl_str}{_format_vulns_inline(rr)}"
                     )
             lines.append("")
 
@@ -353,7 +368,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                     lines.append(
                         f"  - 📦 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {arch_str}"
                         f"last push **{format_duration_human(rr.inactive_days)}** ago (`{last_str}`)"
-                        f"{web_str}"
+                        f"{web_str}{_format_vulns_inline(rr)}"
                     )
 
     # Sections 3–5: Stale GitHub Repositories by Inactivity Tier (longest unupdated at top)
@@ -390,7 +405,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                 web_str = _format_web_links_inline(item, rr)
                 lines.append(
                     f"  - [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — **{format_duration_human(rr.inactive_days)}** "
-                    f"without updates (last activity `{last_str}`){web_str}"
+                    f"without updates (last activity `{last_str}`){web_str}{_format_vulns_inline(rr)}"
                 )
 
     # Section 6: Dead / Parked / TLS Error sites
@@ -532,6 +547,16 @@ def render_json_report(report: DriftReport) -> str:
                         "homepage_url": rr.homepage_url,
                         "replacement_url": rr.replacement_url,
                         "replacement_status": rr.replacement_status,
+                        "vulns": [
+                            {
+                                "vuln_id": v.vuln_id,
+                                "severity": v.severity,
+                                "summary": v.summary,
+                                "package_name": v.package_name,
+                                "advisory_url": v.advisory_url,
+                            }
+                            for v in rr.vulns
+                        ],
                         "reason": rr.reason,
                         "source": next(
                             (

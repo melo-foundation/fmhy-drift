@@ -414,6 +414,7 @@ def _build_graphql_batch_query(batch: list[GitHubRef]) -> str:
     defaultBranchRef {{
       target {{
         ... on Commit {{
+          oid
           committedDate
         }}
       }}
@@ -771,11 +772,14 @@ class GitHubActivityChecker:
 
             pushed_at = _parse_iso_datetime(node.get("pushedAt"))
             commit_date: datetime | None = None
+            commit_oid: str | None = None
             default_branch = node.get("defaultBranchRef")
             if isinstance(default_branch, dict):
                 target = default_branch.get("target")
                 if isinstance(target, dict):
                     commit_date = _parse_iso_datetime(target.get("committedDate"))
+                    if isinstance(target.get("oid"), str):
+                        commit_oid = target["oid"]
                     if commit_date is not None and commit_date > self.now:
                         commit_date = pushed_at
 
@@ -793,7 +797,7 @@ class GitHubActivityChecker:
             else:
                 latest_ts = _latest_activity([pushed_at, commit_date, release_date])
 
-            results[ref.key] = _evaluate_repo_state(
+            res_obj = _evaluate_repo_state(
                 owner=ref.owner,
                 repo=ref.repo,
                 canonical_full_name=node.get("nameWithOwner"),
@@ -807,6 +811,9 @@ class GitHubActivityChecker:
                 thresholds=self.thresholds,
                 now=self.now,
             )
+            if commit_oid:
+                res_obj = replace(res_obj, head_commit_oid=commit_oid)
+            results[ref.key] = res_obj
 
         return unresolved
 
