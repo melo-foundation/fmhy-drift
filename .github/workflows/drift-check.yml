@@ -1,0 +1,113 @@
+name: FMHY Index Drift & GitHub Activity Check
+
+on:
+  schedule:
+    # Weekly every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      warn_days_1:
+        description: "Tier 1 (Notice) GitHub inactivity threshold in days"
+        required: false
+        default: "90"
+        type: string
+      warn_days_2:
+        description: "Tier 2 (Warning) GitHub inactivity threshold in days"
+        required: false
+        default: "180"
+        type: string
+      warn_days_3:
+        description: "Tier 3 (Critical) GitHub inactivity threshold in days"
+        required: false
+        default: "365"
+        type: string
+      category_filter:
+        description: "Optional category substring filter (blank = entire FMHY index)"
+        required: false
+        default: ""
+        type: string
+      starred_only:
+        description: "Only check starred (recommended) entries"
+        required: false
+        default: false
+        type: boolean
+      max_entries:
+        description: "Optional max entries limit for quick test runs (0 = all)"
+        required: false
+        default: "0"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  drift-check:
+    name: Proxy Liveness & GitHub Staleness Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check whether PROXY_URL secret is configured
+        id: proxy_gate
+        env:
+          PROXY_URL_SECRET: ${{ secrets.PROXY_URL }}
+        run: |
+          if [ -z "${PROXY_URL_SECRET}" ]; then
+            echo "configured=false" >> "${GITHUB_OUTPUT}"
+            {
+              echo "### ⏭️ FMHY Drift Check Skipped"
+              echo ""
+              echo "\`secrets.PROXY_URL\` is not configured in repository secrets."
+              echo "Site liveness checks refuse to run from a direct GitHub Actions runner IP."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::notice::Skipping FMHY drift check because PROXY_URL secret is not set."
+          else
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Checkout repository
+        if: steps.proxy_gate.outputs.configured == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install uv and Python 3.12
+        if: steps.proxy_gate.outputs.configured == 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project dependencies
+        if: steps.proxy_gate.outputs.configured == 'true'
+        run: uv sync --frozen || uv sync
+
+      - name: Run FMHY drift and GitHub staleness check
+        if: steps.proxy_gate.outputs.configured == 'true'
+        env:
+          PROXY_URL: ${{ secrets.PROXY_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WARN_DAYS_1: ${{ inputs.warn_days_1 || vars.WARN_DAYS_1 || '90' }}
+          WARN_DAYS_2: ${{ inputs.warn_days_2 || vars.WARN_DAYS_2 || '180' }}
+          WARN_DAYS_3: ${{ inputs.warn_days_3 || vars.WARN_DAYS_3 || '365' }}
+          CATEGORY_FILTER: ${{ inputs.category_filter || '' }}
+          MAX_ENTRIES: ${{ inputs.max_entries || '0' }}
+        run: |
+          EXTRA_ARGS=()
+          if [ "${{ inputs.starred_only }}" = "true" ]; then
+            EXTRA_ARGS+=(--starred-only)
+          fi
+          uv run fmhy-drift \
+            --skip-without-proxy \
+            --markdown-out reports/fmhy-drift-report.md \
+            --json-out reports/fmhy-drift-report.json \
+            "${EXTRA_ARGS[@]}"
+
+      - name: Upload Markdown and JSON drift reports
+        if: steps.proxy_gate.outputs.configured == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fmhy-drift-reports-${{ github.run_number }}
+          path: |
+            reports/fmhy-drift-report.md
+            reports/fmhy-drift-report.json
+          if-no-files-found: ignore
+          retention-days: 30

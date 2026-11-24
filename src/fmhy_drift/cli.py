@@ -1,0 +1,384 @@
+"""Command-line entrypoint for the FMHY index drift and GitHub staleness checker."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+from fmhy_drift.github_checker import GitHubActivityChecker
+from fmhy_drift.models import (
+    DriftReport,
+    EntryDriftResult,
+    GitHubRef,
+    TierThresholds,
+    WikiEntry,
+)
+from fmhy_drift.parser import (
+    DEFAULT_FMHY_SINGLE_PAGE_URL,
+    fetch_remote_index,
+    load_local_index,
+)
+from fmhy_drift.proxy_guard import (
+    ProxyGuardError,
+    ProxyMissingError,
+    validate_proxy_url,
+    verify_proxy_egress,
+)
+from fmhy_drift.reporter import (
+    render_json_report,
+    render_markdown_report,
+    send_discord_webhook,
+    summarize_report,
+)
+from fmhy_drift.site_checker import SiteChecker, filter_discovered_for_entry
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else default
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="fmhy-drift",
+        description=(
+            "Check all FMHY index sites for liveness (strictly via proxy, never direct runner IP) "
+            "and audit linked or auto-discovered GitHub repositories for inactivity."
+        ),
+    )
+    parser.add_argument(
+        "--proxy",
+        default=os.environ.get("PROXY_URL", ""),
+        help="Mandatory HTTP/HTTPS/SOCKS5 proxy URL for site liveness checks (or set PROXY_URL).",
+    )
+    parser.add_argument(
+        "--skip-without-proxy",
+        action="store_true",
+        help="Exit cleanly with code 0 instead of failing if no proxy URL is provided (useful in CI).",
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=None,
+        help="Optional local FMHY markdown file or docs/ directory. Defaults to fetching api.fmhy.net/single-page.",
+    )
+    parser.add_argument(
+        "--index-url",
+        default=os.environ.get("FMHY_INDEX_URL", DEFAULT_FMHY_SINGLE_PAGE_URL),
+        help=f"Remote FMHY single-page markdown URL (default: {DEFAULT_FMHY_SINGLE_PAGE_URL}).",
+    )
+    parser.add_argument(
+        "--proxy-index",
+        action="store_true",
+        help="Also fetch the FMHY index markdown itself through PROXY_URL.",
+    )
+    parser.add_argument(
+        "--proxy-github",
+        action="store_true",
+        help="Also route GitHub API calls through PROXY_URL (default uses direct GitHub API).",
+    )
+    parser.add_argument(
+        "--github-token",
+        default=os.environ.get("GITHUB_TOKEN", ""),
+        help="GitHub token for batched GraphQL activity checks (5,000 pts/hr; or set GITHUB_TOKEN).",
+    )
+    parser.add_argument(
+        "--warn-days-1",
+        type=int,
+        default=_env_int("WARN_DAYS_1", 90),
+        help="Tier 1 (Notice) inactivity threshold in days (default: 90 / ~3 months).",
+    )
+    parser.add_argument(
+        "--warn-days-2",
+        type=int,
+        default=_env_int("WARN_DAYS_2", 180),
+        help="Tier 2 (Warning) inactivity threshold in days (default: 180 / ~6 months).",
+    )
+    parser.add_argument(
+        "--warn-days-3",
+        type=int,
+        default=_env_int("WARN_DAYS_3", 365),
+        help="Tier 3 (Critical) inactivity threshold in days (default: 365 / 1 year).",
+    )
+    parser.add_argument(
+        "--discover-github",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Auto-discover linked GitHub repositories on live site homepages (default: enabled).",
+    )
+    parser.add_argument(
+        "--include-social",
+        action="store_true",
+        help="Include Discord/Reddit/Telegram links in site liveness checks (skipped by default).",
+    )
+    parser.add_argument(
+        "--category",
+        default=os.environ.get("CATEGORY_FILTER", ""),
+        help="Case-insensitive substring filter on category/subcategory name.",
+    )
+    parser.add_argument(
+        "--starred-only",
+        action="store_true",
+        help="Only check ⭐ recommended entries (useful if reducing noise).",
+    )
+    parser.add_argument(
+        "--max-entries",
+        type=int,
+        default=_env_int("MAX_ENTRIES", 0),
+        help="Optional cap on number of entries to evaluate (0 = all).",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=_env_int("CONCURRENCY", 25),
+        help="Max concurrent site liveness checks through proxy (default: 25).",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=20.0,
+        help="Per-site HTTP timeout in seconds (default: 20).",
+    )
+    parser.add_argument(
+        "--markdown-out",
+        type=Path,
+        default=Path("reports/fmhy-drift-report.md"),
+        help="Output path for the Markdown report (default: reports/fmhy-drift-report.md).",
+    )
+    parser.add_argument(
+        "--json-out",
+        type=Path,
+        default=Path("reports/fmhy-drift-report.json"),
+        help="Output path for the JSON report (default: reports/fmhy-drift-report.json).",
+    )
+    parser.add_argument(
+        "--discord-webhook",
+        default=os.environ.get("DISCORD_WEBHOOK_URL", ""),
+        help="Optional Discord webhook URL to post summary embed + Markdown report attachment.",
+    )
+    return parser
+
+
+def _filter_entries(
+    entries: list[WikiEntry],
+    *,
+    category_filter: str,
+    starred_only: bool,
+    max_entries: int,
+) -> list[WikiEntry]:
+    filtered = entries
+    if category_filter.strip():
+        needle = category_filter.strip().lower()
+        filtered = [
+            e
+            for e in filtered
+            if needle in e.category.lower() or needle in e.subcategory.lower()
+        ]
+    if starred_only:
+        filtered = [e for e in filtered if e.starred]
+    if max_entries > 0:
+        filtered = filtered[:max_entries]
+    return filtered
+
+
+def _write_github_step_summary(markdown_text: str) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+    if not summary_path:
+        return
+    path = Path(summary_path)
+    # GitHub Step Summary limit is 1 MiB; write truncated view if report is larger
+    encoded = markdown_text.encode("utf-8")
+    if len(encoded) > 950_000:
+        truncated = encoded[:900_000].decode("utf-8", errors="ignore")
+        truncated += "\n\n> _Truncated in Step Summary; download full `fmhy-drift-report.md` artifact._\n"
+        path.write_text(truncated, encoding="utf-8")
+    else:
+        path.write_text(markdown_text, encoding="utf-8")
+
+
+async def run_drift_pipeline(args: argparse.Namespace) -> int:
+    thresholds = TierThresholds(
+        tier1_days=args.warn_days_1,
+        tier2_days=args.warn_days_2,
+        tier3_days=args.warn_days_3,
+    )
+
+    # 1. Enforce mandatory proxy BEFORE any site scanning
+    try:
+        proxy_url = validate_proxy_url(args.proxy)
+    except ProxyMissingError as exc:
+        if args.skip_without_proxy:
+            msg = (
+                "⏭️ Skipping FMHY drift check: no proxy configured (PROXY_URL is unset). "
+                "Site liveness checks never run directly from a GitHub runner."
+            )
+            print(msg)
+            _write_github_step_summary(f"### FMHY Drift Check Skipped\n\n{msg}\n")
+            return 0
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    except ProxyGuardError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+    print("Verifying proxy egress isolation...", flush=True)
+    try:
+        proxy_verification = await verify_proxy_egress(proxy_url)
+    except ProxyGuardError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+    print(
+        f"Proxy verified: {proxy_verification.redacted_proxy} "
+        f"(fingerprint={proxy_verification.egress_ip_sha256_prefix}, "
+        f"isolated={proxy_verification.verified_distinct_from_host})",
+        flush=True,
+    )
+
+    # 2. Load FMHY index
+    if args.input is not None:
+        index_source = str(args.input.resolve())
+        entries = load_local_index(args.input, include_social=args.include_social)
+    else:
+        index_source = args.index_url
+        entries = await fetch_remote_index(
+            args.index_url,
+            proxy_url=proxy_url if args.proxy_index else None,
+            include_social=args.include_social,
+        )
+
+    entries = _filter_entries(
+        entries,
+        category_filter=args.category,
+        starred_only=args.starred_only,
+        max_entries=args.max_entries,
+    )
+
+    all_site_urls = [u for e in entries for u in e.site_urls]
+    unique_site_count = len(dict.fromkeys(all_site_urls))
+    print(
+        f"Loaded {len(entries)} FMHY entries ({unique_site_count} unique site URLs). "
+        "Running liveness checks via proxy...",
+        flush=True,
+    )
+
+    # 3. Check site liveness (strictly via proxy) & discover homepage GitHub links
+    site_checker = SiteChecker(
+        proxy_url=proxy_url,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
+        discover_github=args.discover_github,
+    )
+    site_results_map = await site_checker.check_urls(all_site_urls)
+
+    # 4. Merge explicit FMHY GitHub refs + homepage auto-discovered GitHub refs
+    entry_all_refs: list[list[GitHubRef]] = []
+    combined_refs_for_api: list[GitHubRef] = []
+
+    for entry in entries:
+        merged: list[GitHubRef] = list(entry.github_refs)
+        seen_keys = {r.key for r in merged}
+
+        if args.discover_github:
+            raw_candidates: list[GitHubRef] = []
+            for u in entry.site_urls:
+                sr = site_results_map.get(u)
+                if sr and sr.discovered_githubs:
+                    raw_candidates.extend(sr.discovered_githubs)
+            filtered_discovered = filter_discovered_for_entry(entry, raw_candidates)
+            for cand in filtered_discovered:
+                if cand.key not in seen_keys:
+                    seen_keys.add(cand.key)
+                    merged.append(cand)
+
+        entry_all_refs.append(merged)
+        combined_refs_for_api.extend(merged)
+
+    unique_repo_count = len({r.key for r in combined_refs_for_api})
+    print(
+        f"Checking activity across {unique_repo_count} unique GitHub repositories "
+        f"(thresholds: {thresholds.tier1_days}d / {thresholds.tier2_days}d / {thresholds.tier3_days}d)...",
+        flush=True,
+    )
+
+    # 5. Check GitHub activity & archival status
+    gh_checker = GitHubActivityChecker(
+        thresholds=thresholds,
+        github_token=args.github_token or None,
+        proxy_url=proxy_url if args.proxy_github else None,
+    )
+    repo_results_map = await gh_checker.check_repos(combined_refs_for_api)
+
+    # 6. Assemble DriftReport
+    entry_results: list[EntryDriftResult] = []
+    for entry, refs in zip(entries, entry_all_refs, strict=True):
+        s_results = [site_results_map[u] for u in entry.site_urls if u in site_results_map]
+        r_results = [repo_results_map[r.key] for r in refs if r.key in repo_results_map]
+        entry_results.append(
+            EntryDriftResult(
+                entry=entry,
+                site_results=s_results,
+                all_github_refs=refs,
+                repo_results=r_results,
+            )
+        )
+
+    report = DriftReport(
+        generated_at=datetime.now(UTC),
+        index_source=index_source,
+        thresholds=thresholds,
+        proxy_verification=proxy_verification,
+        entries=entry_results,
+        unique_sites_checked=unique_site_count,
+        unique_repos_checked=unique_repo_count,
+    )
+
+    markdown_text = render_markdown_report(report)
+    json_text = render_json_report(report)
+
+    args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
+    args.markdown_out.write_text(markdown_text, encoding="utf-8")
+
+    args.json_out.parent.mkdir(parents=True, exist_ok=True)
+    args.json_out.write_text(json_text, encoding="utf-8")
+
+    _write_github_step_summary(markdown_text)
+
+    summary = summarize_report(report)
+    print(
+        f"Done! Sites: {summary.sites_alive} alive, {summary.sites_dead} dead, "
+        f"{summary.sites_parked} parked, {summary.sites_waf_or_rate_limited} WAF | "
+        f"GitHub: {summary.repos_active} active, {summary.repos_tier1_notice} >= {thresholds.tier1_days}d, "
+        f"{summary.repos_tier2_warning} >= {thresholds.tier2_days}d, "
+        f"{summary.repos_tier3_critical} >= {thresholds.tier3_days}d, "
+        f"{summary.repos_archived} archived, {summary.repos_missing} missing, "
+        f"{summary.newly_discovered_github_links} newly discovered.",
+        flush=True,
+    )
+    print(f"Reports written to {args.markdown_out} and {args.json_out}", flush=True)
+
+    webhook = args.discord_webhook.strip()
+    if webhook:
+        print("Sending summary and report attachment to Discord webhook...", flush=True)
+        await send_discord_webhook(webhook, report, args.markdown_out)
+        print("Discord notification sent.", flush=True)
+
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    try:
+        return asyncio.run(run_drift_pipeline(args))
+    except ValueError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

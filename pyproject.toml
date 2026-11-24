@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fmhy-drift"
+version = "0.1.0"
+description = "Proxy-enforced site liveness, linked GitHub auto-discovery, and repository staleness drift checker for the FMHY index."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx[socks]>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+fmhy-drift = "fmhy_drift.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fmhy_drift"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
