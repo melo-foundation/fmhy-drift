@@ -1,6 +1,9 @@
 name: FMHY Index Drift & GitHub Activity Check
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     # Weekly every Monday at 06:00 UTC
     - cron: "0 6 * * 1"
