@@ -46,7 +46,7 @@ from fmhy_drift.reporter import (
     summarize_report,
 )
 from fmhy_drift.site_checker import SiteChecker, filter_discovered_for_entry
-from fmhy_drift.triage_ui import TRIAGE_HTML
+from fmhy_drift.triage_ui import write_triage_site
 from fmhy_drift.vuln_checker import RepoVulnChecker
 from fmhy_drift.whitelist import load_whitelist
 
@@ -686,8 +686,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json_text, encoding="utf-8")
 
-    args.html_out.parent.mkdir(parents=True, exist_ok=True)
-    args.html_out.write_text(TRIAGE_HTML, encoding="utf-8")
+    write_triage_site(args.html_out)
 
     # Copy whitelist.json alongside index.html so static GitHub Pages bundle has a local fallback
     wl_dest = args.html_out.parent / "whitelist.json"

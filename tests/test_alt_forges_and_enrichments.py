@@ -496,6 +496,10 @@ def test_cli_incremental_reuse_report_preserves_github_and_sites(tmp_path: Path)
         ]
     )
     assert rc == 0
+    assert (tmp_path / "out" / "404.html").is_file()
+    assert (tmp_path / "out" / "severe-vulns" / "index.html").is_file()
+    assert (tmp_path / "out" / "done" / "index.html").is_file()
+    assert (tmp_path / "out" / "dead-repos" / "index.html").is_file()
     result = json.loads(out_json.read_text(encoding="utf-8"))
     assert result["summary"]["unique_sites_checked"] == 42
     assert result["entries"][0]["sites"][0]["inactive_days"] == 693

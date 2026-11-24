@@ -85,7 +85,7 @@ jobs:
                 mv /tmp/prev-report.json reports/fmhy-drift-report.json
                 mv /tmp/prev-report.md reports/fmhy-drift-report.md
                 cp whitelist.json reports/whitelist.json
-                PYTHONPATH=src python3 -c "from pathlib import Path; from fmhy_drift.triage_ui import TRIAGE_HTML; Path('reports/index.html').write_text(TRIAGE_HTML, encoding='utf-8')"
+                PYTHONPATH=src python3 -c "from pathlib import Path; from fmhy_drift.triage_ui import write_triage_site; write_triage_site(Path('reports/index.html'))"
                 echo "Fast UI-only redeploy: reusing existing report data from GitHub Pages."
                 echo "ui_only=true" >> "${GITHUB_OUTPUT}"
                 exit 0

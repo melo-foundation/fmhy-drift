@@ -2,6 +2,36 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+FOLDER_ROUTE_SLUGS: tuple[str, ...] = (
+    "inbox",
+    "dead-repos",
+    "severe-vulns",
+    "moved",
+    "archived",
+    "critical",
+    "warning",
+    "notice",
+    "dead-sites",
+    "outbox",
+    "done",
+    "whitelisted",
+)
+
+
+def write_triage_site(html_out: Path) -> None:
+    """Write `index.html`, `404.html`, and per-folder `<slug>/index.html` routes for static hosting."""
+    out_dir = html_out.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    html_out.write_text(TRIAGE_HTML, encoding="utf-8")
+    (out_dir / "404.html").write_text(TRIAGE_HTML, encoding="utf-8")
+    for slug in FOLDER_ROUTE_SLUGS:
+        route_file = out_dir / slug / "index.html"
+        route_file.parent.mkdir(parents=True, exist_ok=True)
+        route_file.write_text(TRIAGE_HTML, encoding="utf-8")
+
+
 TRIAGE_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -279,7 +309,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       gap: 5px;
       color: #111;
     }
-    .tb-folder-item {
+    .tb-folder-item,
+    a.tb-folder-item {
       padding: 2px 6px 2px 18px;
       display: flex;
       align-items: center;
@@ -290,9 +321,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       overflow: hidden;
       text-overflow: ellipsis;
       color: #111;
+      text-decoration: none;
     }
-    .tb-folder-item:hover {
+    .tb-folder-item:hover,
+    a.tb-folder-item:hover {
       background: #eef4fc;
+      color: #111;
+      text-decoration: none;
     }
     .tb-folder-item.active {
       background: linear-gradient(180deg, #dceafc 0%, #c1daf8 100%);
@@ -755,9 +790,12 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       color: #d6e1f0;
     }
     html.dark .tb-tree-root,
-    html.dark .tb-folder-item { color: #dce6f2; }
-    html.dark .tb-folder-item:hover { background: #242e3d; }
-    html.dark .tb-folder-item.active {
+    html.dark .tb-folder-item,
+    html.dark a.tb-folder-item { color: #dce6f2; }
+    html.dark .tb-folder-item:hover,
+    html.dark a.tb-folder-item:hover { background: #242e3d; color: #dce6f2; }
+    html.dark .tb-folder-item.active,
+    html.dark a.tb-folder-item.active {
       background: linear-gradient(180deg, #274c7d 0%, #1e3c63 100%);
       border-color: #4978b5;
       color: #ffffff;
@@ -893,8 +931,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     <!-- Menu bar -->
     <div class="tb-menubar">
-      <a class="tb-menu-item" href="./fmhy-drift-report.md" target="_blank" rel="noopener"><u>F</u>ile (.md)</a>
-      <a class="tb-menu-item" href="./fmhy-drift-report.json" target="_blank" rel="noopener"><u>D</u>ata (.json)</a>
+      <a class="tb-menu-item" id="menu-file-md" href="./fmhy-drift-report.md" target="_blank" rel="noopener"><u>F</u>ile (.md)</a>
+      <a class="tb-menu-item" id="menu-data-json" href="./fmhy-drift-report.json" target="_blank" rel="noopener"><u>D</u>ata (.json)</a>
       <span class="tb-menu-item" id="menu-tick-page"><u>E</u>dit (Tick Page)</span>
       <span class="tb-menu-item" id="menu-ticked-done" title="Hide all currently ticked items in local Done / Pending folder and clear ticks">✓ Ticked &rarr; <u>D</u>one</span>
       <span class="tb-menu-item" id="menu-clear-ticks"><u>C</u>lear Ticks</span>
@@ -1126,6 +1164,83 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     const REPO_SLUG = detectRepoSlug();
     const PAGE_SIZE = 100;
 
+    const FOLDER_SLUGS = {
+      inbox_all: "inbox",
+      missing: "dead-repos",
+      severe_vulns: "severe-vulns",
+      archived_moved: "moved",
+      archived: "archived",
+      tier3_critical: "critical",
+      tier2_warning: "warning",
+      tier1_notice: "notice",
+      dead_sites: "dead-sites",
+      outbox: "outbox",
+      done_pending: "done",
+      whitelisted: "whitelisted",
+    };
+
+    const SLUG_TO_FOLDER = {
+      inbox: "inbox_all",
+      inbox_all: "inbox_all",
+      "dead-repos": "missing",
+      missing: "missing",
+      "severe-vulns": "severe_vulns",
+      severe_vulns: "severe_vulns",
+      moved: "archived_moved",
+      archived_moved: "archived_moved",
+      archived: "archived",
+      critical: "tier3_critical",
+      tier3_critical: "tier3_critical",
+      warning: "tier2_warning",
+      tier2_warning: "tier2_warning",
+      notice: "tier1_notice",
+      tier1_notice: "tier1_notice",
+      "dead-sites": "dead_sites",
+      dead_sites: "dead_sites",
+      outbox: "outbox",
+      done: "done_pending",
+      pending: "done_pending",
+      done_pending: "done_pending",
+      whitelisted: "whitelisted",
+    };
+
+    function detectRouteContext() {
+      try {
+        let p = (window.location.pathname || "/").replace(/\/index\.html$/i, "").replace(/\/+$/, "");
+        const segs = p.split("/").filter(Boolean);
+        if (segs.length > 0) {
+          const lastLow = segs[segs.length - 1].toLowerCase();
+          if (Object.prototype.hasOwnProperty.call(SLUG_TO_FOLDER, lastLow)) {
+            const baseSegs = segs.slice(0, -1);
+            return {
+              basePath: baseSegs.length ? "/" + baseSegs.join("/") : "",
+              folder: SLUG_TO_FOLDER[lastLow],
+              hasExplicitSlug: true,
+            };
+          }
+        }
+        return {
+          basePath: segs.length ? "/" + segs.join("/") : "",
+          folder: "inbox_all",
+          hasExplicitSlug: false,
+        };
+      } catch {
+        return { basePath: "", folder: "inbox_all", hasExplicitSlug: false };
+      }
+    }
+
+    const INITIAL_ROUTE = detectRouteContext();
+    const SITE_BASE_PATH = INITIAL_ROUTE.basePath;
+
+    function assetUrl(fileName) {
+      return `${SITE_BASE_PATH}/${fileName}`;
+    }
+
+    function folderPath(folderId) {
+      const slug = FOLDER_SLUGS[folderId] || "inbox";
+      return `${SITE_BASE_PATH}/${slug}/`;
+    }
+
     function normalizeRepoKey(raw) {
       if (!raw || typeof raw !== "string") return "";
       let s = raw.trim();
@@ -1178,7 +1293,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     const state = {
       items: [],
       categories: [],
-      activeFolder: "inbox_all",
+      activeFolder: INITIAL_ROUTE.folder,
       activeCategory: "",
       sortField: "days",
       sortAsc: false,
@@ -1209,6 +1324,15 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     const helpLinkEl = document.getElementById("menu-help-gh");
     if (helpLinkEl) helpLinkEl.href = `https://github.com/${REPO_SLUG}`;
+    const mdLinkEl = document.getElementById("menu-file-md");
+    if (mdLinkEl) mdLinkEl.href = assetUrl("fmhy-drift-report.md");
+    const jsonLinkEl = document.getElementById("menu-data-json");
+    if (jsonLinkEl) jsonLinkEl.href = assetUrl("fmhy-drift-report.json");
+    try {
+      if (!INITIAL_ROUTE.hasExplicitSlug && window.history && window.history.replaceState) {
+        window.history.replaceState({ folder: state.activeFolder }, "", folderPath(state.activeFolder));
+      }
+    } catch {}
     document.getElementById("webhook-url").value = localStorage.getItem("fmhy_discord_webhook") || "";
     document.getElementById("gh-pat").value = localStorage.getItem("fmhy_gh_pat") || "";
 
@@ -1465,9 +1589,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         }
       } catch {}
 
-      // 2. Fallback to sibling ./whitelist.json or raw.githubusercontent.com
+      // 2. Fallback to sibling whitelist.json at site base or raw.githubusercontent.com
       const fallbackUrls = [
-        "./whitelist.json",
+        assetUrl("whitelist.json"),
         `https://raw.githubusercontent.com/${REPO_SLUG}/main/whitelist.json?t=${Date.now()}`,
       ];
       for (const u of fallbackUrls) {
@@ -1487,7 +1611,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       try {
         await loadRemoteWhitelist();
 
-        const resp = await fetch(`./fmhy-drift-report.json?t=${Date.now()}`, { cache: "no-store" });
+        const resp = await fetch(`${assetUrl("fmhy-drift-report.json")}?t=${Date.now()}`, { cache: "no-store" });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const report = await resp.json();
         ingestReport(report);
@@ -1701,6 +1825,27 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       return list;
     }
 
+    function navigateToFolder(folderId, pushHistory = true) {
+      state.activeFolder = folderId;
+      state.page = 0;
+      if (pushHistory) {
+        try {
+          const targetUrl = folderPath(folderId);
+          if (window.location.pathname !== targetUrl && window.history && window.history.pushState) {
+            window.history.pushState({ folder: folderId }, "", targetUrl);
+          }
+        } catch {}
+      }
+      renderAll();
+    }
+
+    window.addEventListener("popstate", () => {
+      const ctx = detectRouteContext();
+      state.activeFolder = ctx.folder;
+      state.page = 0;
+      renderAll();
+    });
+
     function renderFolderTree() {
       const folders = getFolders();
       const tree = document.getElementById("folder-tree");
@@ -1711,10 +1856,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         const activeCls = state.activeFolder === f.id ? " active" : "";
         const boldCls = cnt > 0 ? " has-items" : "";
         const countSuffix = cnt > 0 ? ` (${cnt})` : "";
-        html += `<div class="tb-folder-item${activeCls}${boldCls}" data-folder="${f.id}" title="${escapeHtml(f.tip || f.label)}">
+        html += `<a class="tb-folder-item${activeCls}${boldCls}" href="${escapeHtml(folderPath(f.id))}" data-folder="${f.id}" title="${escapeHtml(f.tip || f.label)}">
           ${folderSvg(f.icon)}
           <span>${escapeHtml(f.label)}${countSuffix}</span>
-        </div>`;
+        </a>`;
       }
 
       html += `<div class="tb-cat-divider">▾ ${folderSvg("folder")} <span>Category Filter</span></div>`;
@@ -1732,8 +1877,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       tree.innerHTML = html;
 
       const activeFolderObj = folders.find(x => x.id === state.activeFolder);
-      document.getElementById("window-title").textContent =
-        `${activeFolderObj ? activeFolderObj.label : "Drift"} - FMHY Drift Thunderbird`;
+      const winTitle = `${activeFolderObj ? activeFolderObj.label : "Drift"} - FMHY Drift Thunderbird`;
+      document.getElementById("window-title").textContent = winTitle;
+      document.title = winTitle;
 
       const totalLoadedRepos = state.items.filter(it => it.kind === "repo").length;
       const flaggedCount = itemsForFolder("inbox_all").length;
@@ -1742,10 +1888,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         `${flaggedCount} flagged / ${totalLoadedRepos} loaded repo rows${minSuffix}`;
 
       tree.querySelectorAll("[data-folder]").forEach(el => {
-        el.onclick = () => {
-          state.activeFolder = el.getAttribute("data-folder");
-          state.page = 0;
-          renderAll();
+        el.onclick = (e) => {
+          if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault();
+          navigateToFolder(el.getAttribute("data-folder"), true);
         };
       });
 
@@ -2410,9 +2556,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       renderAll();
     };
     document.getElementById("menu-outbox").onclick = () => {
-      state.activeFolder = "outbox";
-      state.page = 0;
-      renderAll();
+      navigateToFolder("outbox", true);
     };
     document.getElementById("menu-theme-toggle").onclick = () => {
       const isDark = document.documentElement.classList.toggle("dark");
