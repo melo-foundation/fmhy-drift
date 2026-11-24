@@ -896,13 +896,15 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       <a class="tb-menu-item" href="./fmhy-drift-report.md" target="_blank" rel="noopener"><u>F</u>ile (.md)</a>
       <a class="tb-menu-item" href="./fmhy-drift-report.json" target="_blank" rel="noopener"><u>D</u>ata (.json)</a>
       <span class="tb-menu-item" id="menu-tick-page"><u>E</u>dit (Tick Page)</span>
+      <span class="tb-menu-item" id="menu-ticked-done" title="Hide all currently ticked items in local Done / Pending folder and clear ticks">✓ Ticked &rarr; <u>D</u>one</span>
       <span class="tb-menu-item" id="menu-clear-ticks"><u>C</u>lear Ticks</span>
+      <span class="tb-menu-item" id="menu-restore-done" title="Move all items in Done / Pending back to Inbox">Restore Done</span>
       <span class="tb-menu-item" id="menu-outbox"><u>M</u>essage Outbox</span>
       <span class="tb-menu-item" id="menu-copy-wl"><u>T</u>ools (Edit whitelist.json)</span>
       <span class="tb-menu-item" id="menu-theme-toggle"><u>V</u>iew (☀️ Light / 🌙 Dark)</span>
       <a class="tb-menu-item" id="menu-help-gh" href="https://github.com/melo-foundation/fmhy-drift" target="_blank" rel="noopener"><u>H</u>elp (GitHub)</a>
       <div class="tb-menubar-spacer"></div>
-      <span class="tb-muted-note" style="font-size:10.5px;padding-right:6px;">Keys: ↑/↓ Navigate · Space Tick · J Whitelist</span>
+      <span class="tb-muted-note" style="font-size:10.5px;padding-right:6px;">Keys: ↑/↓ Navigate · Space Tick · D Done/Hide · J Whitelist</span>
     </div>
 
     <!-- Big-Icon XUL Toolbar -->
@@ -929,6 +931,11 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         <span>Tag / Tick</span>
       </button>
 
+      <button type="button" class="tb-tool-btn" id="btn-ticked-done" title="Move all ticked items (or focused item if none ticked) to local Done / Pending folder so they hide from Inbox">
+        <svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3V6z" fill="#7fc8a9" stroke="#23684b" stroke-width="1.4"/><path d="M8.5 13l2.3 2.3 4.7-4.7" fill="none" stroke="#134e35" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>Ticked &rarr; Done</span>
+      </button>
+
       <button type="button" class="tb-tool-btn" id="btn-junk-wl" title="Whitelist / Unwhitelist selected item (Key: J)">
         <svg viewBox="0 0 24 24"><path d="M13.5 2s.8 3.2-1.5 5.4c-1.8 1.7-2.2 3.3-1.2 4.8-1.8-.6-2.8-2.3-2.5-4.3C5.7 9.8 5 12.8 6.2 15.8 7.5 19 10.5 21 13.3 21c3.6 0 6.2-2.7 6.2-6.3 0-4.2-2.8-6.4-2.8-6.4s.2 2.2-1.4 3.1c.6-3.1-.5-6.7-1.8-9.4z" fill="#f2791a" stroke="#a64300" stroke-width="1.2"/></svg>
         <span>Whitelist</span>
@@ -944,9 +951,16 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       <div class="tb-filter-group">
         <label><input type="checkbox" id="starred-only" /> ★ Starred</label>
         <label><input type="checkbox" id="has-web-only" /> 📎 Has Site/Pages</label>
+        <select id="forge-filter" class="tb-source-select" title="Filter repositories by Git forge host">
+          <option value="">Forge: All</option>
+          <option value="github">GitHub</option>
+          <option value="gitlab">GitLab</option>
+          <option value="forgejo">Codeberg / Forgejo / Gitea</option>
+          <option value="other">sr.ht / Bitbucket / Pagure / SF</option>
+        </select>
         <select id="source-filter" class="tb-source-select" title="Filter between repos actually linked in FMHY vs inferred via URL heuristics">
           <option value="">FMHY Link: All</option>
-          <option value="explicit">✓ Has Actual GitHub in FMHY Only</option>
+          <option value="explicit">✓ Explicitly in FMHY Only</option>
           <option value="heuristic">? Guessed / Not in FMHY Only</option>
         </select>
       </div>
@@ -999,7 +1013,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             <table class="tb-table">
               <thead>
                 <tr>
-                  <th class="col-cb" title="Tick for Discord Report">✓</th>
+                  <th class="col-cb" title="Tick / Untick all rows on this page"><input type="checkbox" id="th-cb-all" style="margin:0;cursor:pointer;" /></th>
                   <th class="col-star" data-sort="starred" title="FMHY Starred">★</th>
                   <th class="col-clip" data-sort="links" title="Has Website / Pages / Replacement">📎</th>
                   <th class="col-subject" data-sort="title">Entry / Title</th>
@@ -1025,6 +1039,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             </div>
             <div class="tb-btn-row" style="margin:0;">
               <button type="button" class="tb-classic-btn" id="hdr-tick-btn">✓ Tick for Discord</button>
+              <button type="button" class="tb-classic-btn" id="hdr-done-btn" title="Hide locally in Done / Pending folder without whitelisting (Key: D)">📥 Done / Pending</button>
               <button type="button" class="tb-classic-btn" id="hdr-wl-btn">🔥 Whitelist</button>
             </div>
           </div>
@@ -1058,7 +1073,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
               <div class="tb-btn-row">
                 <button type="button" class="tb-classic-btn primary" id="copy-md-btn">Copy Markdown</button>
                 <button type="button" class="tb-classic-btn" id="download-md-btn">Save .md</button>
-                <input type="password" id="webhook-url" class="tb-input" style="flex:1;min-width:140px;" placeholder="Discord Webhook URL..." />
+                <button type="button" class="tb-classic-btn" id="outbox-move-done-btn" title="Move all ticked items into local Done / Pending folder (hides them from Inbox) and clear ticks">✓ Ticked &rarr; Done</button>
+                <button type="button" class="tb-classic-btn" id="outbox-untick-btn" title="Unselect all ticked items without hiding them">Untick All</button>
+                <input type="password" id="webhook-url" class="tb-input" style="flex:1;min-width:130px;" placeholder="Discord Webhook URL..." />
                 <button type="button" class="tb-classic-btn primary" id="send-discord-btn">Send to Discord</button>
               </div>
 
@@ -1088,6 +1105,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       </div>
       <div class="tb-status-panel" id="stat-showing">Showing: 0</div>
       <div class="tb-status-panel" id="stat-ticked">Ticked: 0</div>
+      <div class="tb-status-panel" id="stat-done">Done: 0</div>
       <div class="tb-status-panel" id="stat-wl">Whitelisted: 0</div>
     </div>
   </div>
@@ -1113,12 +1131,18 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       let s = raw.trim();
       if (!s) return "";
       s = s.replace(/^https?:\/\/(?:www\.)?github\.com\//i, "");
+      s = s.replace(/^https?:\/\/(?:www\.)?/i, "");
       s = s.split(/[?#]/)[0].replace(/^\/+|\/+$/g, "");
       const parts = s.split("/").filter(Boolean);
       if (parts.length < 2) return "";
-      const owner = parts[0].toLowerCase();
-      const repo = parts[1].replace(/\.git$/i, "").toLowerCase();
-      return (owner && repo) ? `${owner}/${repo}` : "";
+      parts[parts.length - 1] = parts[parts.length - 1].replace(/\.git$/i, "");
+      if (parts.length === 2) {
+        return `${parts[0].toLowerCase()}/${parts[1].toLowerCase()}`;
+      }
+      if (parts[0].includes(".")) {
+        return parts.map(p => p.toLowerCase()).join("/");
+      }
+      return `${parts[0].toLowerCase()}/${parts[1].toLowerCase()}`;
     }
 
     function normalizeUrlKey(raw) {
@@ -1167,6 +1191,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       reportDefaults: { t1: 90, t2: 180, t3: 365 },
       thresholdsCustomized: false,
       selectedIds: new Set(safeParseJson(localStorage.getItem("fmhy_selected_ids") || "[]", [])),
+      doneKeys: new Set(safeParseJson(localStorage.getItem("fmhy_done_keys") || "[]", [])),
       notes: safeParseJson(localStorage.getItem("fmhy_item_notes") || "{}", {}),
       whitelistRepos: new Set(
         safeParseJson(localStorage.getItem("fmhy_wl_repos") || "[]", [])
@@ -1189,17 +1214,18 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     function getFolders() {
       return [
-        { id: "inbox_all", label: "Inbox (All Flagged)", icon: "inbox", tip: "All non-whitelisted dead, archived, dead-site, and inactive (>= Notice threshold) entries" },
-        { id: "missing", label: "Dead / 404 Repos", icon: "inbox", tip: "404, DMCA 451, or disabled GitHub repositories" },
+        { id: "inbox_all", label: "Inbox (All Flagged)", icon: "inbox", tip: "All non-whitelisted, non-done dead, archived, dead-site, and inactive entries" },
+        { id: "missing", label: "Dead / 404 Repos", icon: "inbox", tip: "404, DMCA 451, or disabled repositories across GitHub, GitLab, Codeberg, sr.ht, etc." },
         { id: "severe_vulns", label: "Severe Vulns (Crit/High)", icon: "vuln", tip: "Stale or archived repositories with HIGH or CRITICAL vulnerabilities (OSV.dev)" },
-        { id: "archived_moved", label: "Archived — Moved", icon: "moved", tip: "Archived repositories with a detected replacement repository link" },
-        { id: "archived", label: "All Archived", icon: "folder", tip: "All archived GitHub repositories" },
+        { id: "archived_moved", label: "Moved / New Repo", icon: "moved", tip: "Dead or archived repositories with a detected replacement or author's similar active repo" },
+        { id: "archived", label: "All Archived", icon: "folder", tip: "All archived repositories across GitHub, GitLab, Codeberg, SourceForge, etc." },
         { id: "tier3_critical", label: `Inactive >=${state.t3}d`, icon: "folder", tip: `Critical inactivity tier: >= ${state.t3} days since last push/release` },
         { id: "tier2_warning", label: `Inactive >=${state.t2}d`, icon: "folder", tip: `Warning inactivity tier: ${state.t2}–${Math.max(state.t2, state.t3 - 1)} days since last push/release` },
         { id: "tier1_notice", label: `Inactive >=${state.t1}d`, icon: "folder", tip: `Notice inactivity tier: ${state.t1}–${Math.max(state.t1, state.t2 - 1)} days since last push/release` },
-        { id: "dead_sites", label: "Dead / Parked Sites", icon: "folder", tip: "Dead, parked, or TLS-failing website URLs" },
-        { id: "outbox", label: "Discord Outbox", icon: "outbox", tip: "Entries ticked for curated Discord report" },
-        { id: "whitelisted", label: "Whitelisted", icon: "junk", tip: "Ignored / whitelisted repositories and URLs" },
+        { id: "dead_sites", label: "Dead / Parked Sites", icon: "folder", tip: "Dead DNS, parked domains, and dead/TLS-failing servers (sorted by last-active date)" },
+        { id: "outbox", label: "Discord Outbox", icon: "outbox", tip: "Entries currently ticked for curated Discord report" },
+        { id: "done_pending", label: "Done / Pending", icon: "done", tip: "Items hidden locally (e.g. already reported or parked for later) without adding to whitelist.json" },
+        { id: "whitelisted", label: "Whitelisted", icon: "junk", tip: "Globally ignored / whitelisted repositories and URLs (whitelist.json)" },
       ];
     }
 
@@ -1216,11 +1242,20 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     function saveLocalState() {
       localStorage.setItem("fmhy_selected_ids", JSON.stringify([...state.selectedIds]));
+      localStorage.setItem("fmhy_done_keys", JSON.stringify([...state.doneKeys]));
       localStorage.setItem("fmhy_item_notes", JSON.stringify(state.notes));
       localStorage.setItem("fmhy_wl_repos", JSON.stringify([...state.whitelistRepos]));
       localStorage.setItem("fmhy_wl_urls", JSON.stringify([...state.whitelistUrls]));
       if (state.whitelistDirty) localStorage.setItem("fmhy_wl_dirty", "1");
       else localStorage.removeItem("fmhy_wl_dirty");
+    }
+
+    function isDonePending(item) {
+      return (
+        state.doneKeys.has(item.wlKey) ||
+        Boolean(item.origKey && state.doneKeys.has(item.origKey)) ||
+        state.doneKeys.has(item.id)
+      );
     }
 
     function setStatus(msg) {
@@ -1243,12 +1278,26 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       if (type === "vuln") {
         return `<svg class="tb-folder-icon" viewBox="0 0 16 16"><path d="M8 1.5l5.5 2.2v4.1c0 3.5-2.3 6.2-5.5 7.2-3.2-1-5.5-3.7-5.5-7.2V3.7L8 1.5z" fill="#e03e36" stroke="#871914"/><path d="M8 4.5v4.2M8 10.8v1" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>`;
       }
+      if (type === "done") {
+        return `<svg class="tb-folder-icon" viewBox="0 0 16 16"><path d="M1 3h5l1.5 2H15v9H1V3z" fill="#7fc8a9" stroke="#23684b"/><path d="M5.2 9.2l2 2 3.8-3.8" fill="none" stroke="#0d3e29" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+      }
       return `<svg class="tb-folder-icon" viewBox="0 0 16 16"><path d="M1 3h5l1.5 2H15v9H1V3z" fill="#f4d47c" stroke="#a68121"/></svg>`;
     }
 
     function isPagesUrl(url) {
-      try { return new URL(url).hostname.toLowerCase().endsWith(".github.io"); }
-      catch { return false; }
+      try {
+        const h = new URL(url).hostname.toLowerCase();
+        return (
+          h.endsWith(".github.io") ||
+          h.endsWith(".gitlab.io") ||
+          h.endsWith(".codeberg.page") ||
+          h.endsWith(".bitbucket.io") ||
+          h.endsWith(".sourceforge.io") ||
+          h.includes(".pages.gitlab.")
+        );
+      } catch {
+        return false;
+      }
     }
 
     function shortUrlLabel(url) {
@@ -1283,6 +1332,14 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           short: "? github.io",
           full: "⚠️ NOT in FMHY — guessed via *.github.io heuristic",
           discordTag: "guessed: github.io — not in FMHY",
+          isHeur: true,
+        };
+      }
+      if (src === "forge_pages") {
+        return {
+          short: "? Forge Pages",
+          full: "⚠️ NOT in FMHY — guessed via *.gitlab.io / *.codeberg.page / *.sourceforge.io",
+          discordTag: "guessed: forge pages — not in FMHY",
           isHeur: true,
         };
       }
@@ -1500,6 +1557,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             kind: "repo",
             wlKey,
             origKey,
+            forge: rr.forge || "github",
+            forgeHost: rr.forge_host || "github.com",
             requestedFullName: rr.requested_full_name || rr.full_name,
             title: entry.title,
             starred: Boolean(entry.starred),
@@ -1534,11 +1593,16 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           if (seenIds.has(id)) continue;
           seenIds.add(id);
 
+          const siteInactiveDays = sr.inactive_days != null ? sr.inactive_days : null;
+          const siteLastSeen = sr.last_seen_at ? sr.last_seen_at.slice(0, 10) : null;
+
           items.push({
             id,
             kind: "site",
             wlKey,
             origKey,
+            forge: "site",
+            forgeHost: "",
             title: entry.title,
             starred: Boolean(entry.starred),
             category: entry.category,
@@ -1549,9 +1613,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             fullName: "—",
             siteUrl: sr.url,
             siteStatus: sr.status,
-            inactiveDays: null,
-            lastActivityAt: null,
-            sortDays: 1_500_000,
+            inactiveDays: siteInactiveDays,
+            lastActivityAt: siteLastSeen,
+            sortDays: siteInactiveDays != null ? 1_500_000 + siteInactiveDays : 1_500_000,
             reason: sr.reason || "",
             replacementUrl: null,
             replacementStatus: null,
@@ -1569,17 +1633,20 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       if (folderId === "whitelisted") {
         return state.items.filter(it => isWhitelisted(it));
       }
+      if (folderId === "done_pending") {
+        return state.items.filter(it => !isWhitelisted(it) && isDonePending(it));
+      }
       if (folderId === "outbox") {
         return state.items.filter(it => state.selectedIds.has(it.id));
       }
       if (folderId === "inbox_all") {
-        return state.items.filter(it => !isWhitelisted(it) && effectiveTier(it) !== "active");
+        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && effectiveTier(it) !== "active");
       }
       return state.items.filter(it => {
-        if (isWhitelisted(it)) return false;
+        if (isWhitelisted(it) || isDonePending(it)) return false;
         const tier = effectiveTier(it);
         if (folderId === "severe_vulns") return it.kind === "repo" && tier !== "active" && it.vulns && it.vulns.length > 0;
-        if (folderId === "archived_moved") return it.kind === "repo" && tier === "archived" && Boolean(it.replacementUrl);
+        if (folderId === "archived_moved") return it.kind === "repo" && (tier === "archived" || tier === "missing") && Boolean(it.replacementUrl);
         if (folderId === "dead_sites") return it.kind === "site";
         return it.kind === "repo" && tier === folderId;
       });
@@ -1589,6 +1656,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       const q = document.getElementById("search").value.trim().toLowerCase();
       const starredOnly = document.getElementById("starred-only").checked;
       const hasWebOnly = document.getElementById("has-web-only").checked;
+      const forgeMode = document.getElementById("forge-filter").value;
       const srcMode = document.getElementById("source-filter").value;
       const minDays = state.minDays;
 
@@ -1596,12 +1664,20 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         if (state.activeCategory && it.category !== state.activeCategory) return false;
         if (starredOnly && !it.starred) return false;
         if (hasWebOnly && (!it.webUrls || it.webUrls.length === 0)) return false;
+        if (forgeMode) {
+          if (it.kind !== "repo") return false;
+          if (forgeMode === "other") {
+            if (["github", "gitlab", "forgejo"].includes(it.forge)) return false;
+          } else if (it.forge !== forgeMode) {
+            return false;
+          }
+        }
         if (srcMode === "explicit" && (it.kind !== "repo" || it.source !== "explicit_markdown")) return false;
         if (srcMode === "heuristic" && (it.kind !== "repo" || it.source === "explicit_markdown")) return false;
         if (minDays > 0 && (it.inactiveDays == null || it.inactiveDays < minDays)) return false;
         if (!q) return true;
         const vulnHay = (it.vulns || []).map(v => `${v.vuln_id} ${v.package_name || ""} ${v.summary || ""}`).join(" ");
-        const hay = `${it.title} ${it.catLabel} ${it.fullName || ""} ${it.requestedFullName || ""} ${it.siteUrl || ""} ${it.replacementUrl || ""} ${it.source || ""} ${it.rawLine || ""} ${(it.webUrls || []).join(" ")} ${vulnHay}`.toLowerCase();
+        const hay = `${it.title} ${it.catLabel} ${it.fullName || ""} ${it.forge || ""} ${it.forgeHost || ""} ${it.requestedFullName || ""} ${it.siteUrl || ""} ${it.replacementUrl || ""} ${it.source || ""} ${it.rawLine || ""} ${(it.webUrls || []).join(" ")} ${vulnHay}`.toLowerCase();
         return hay.includes(q);
       });
 
@@ -1683,7 +1759,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
 
     function formatStatusCell(it) {
-      if (it.kind === "site") return `${it.siteStatus}: ${it.reason || "unhealthy"}`;
+      if (it.kind === "site") {
+        const sShort = formatAgeShort(it.inactiveDays);
+        return sShort ? `${it.siteStatus} · last active ${sShort} ago` : `${it.siteStatus}: ${it.reason || "unhealthy"}`;
+      }
       const tier = effectiveTier(it);
       const age = formatAgeHuman(it.inactiveDays);
       const pushShort = formatAgeShort(it.inactiveDays);
@@ -1749,10 +1828,12 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     function updateStatusBarCounts(showingCount) {
       const dirtyMark = state.whitelistDirty ? " *" : "";
       const wlTotal = state.whitelistRepos.size + state.whitelistUrls.size;
+      const doneCount = itemsForFolder("done_pending").length;
       if (typeof showingCount === "number") {
         document.getElementById("stat-showing").textContent = `Showing: ${showingCount}`;
       }
       document.getElementById("stat-ticked").textContent = `Ticked: ${state.selectedIds.size}`;
+      document.getElementById("stat-done").textContent = `Done: ${doneCount}`;
       document.getElementById("stat-wl").textContent = `Whitelisted: ${wlTotal}${dirtyMark}`;
       document.getElementById("wl-count").textContent = `${wlTotal} whitelisted${dirtyMark}`;
     }
@@ -1763,6 +1844,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       const totalPages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
       if (state.page >= totalPages) state.page = totalPages - 1;
       const slice = all.slice(state.page * PAGE_SIZE, (state.page + 1) * PAGE_SIZE);
+
+      const thCb = document.getElementById("th-cb-all");
+      if (thCb) {
+        const tickedInSlice = slice.filter(x => state.selectedIds.has(x.id)).length;
+        thCb.checked = slice.length > 0 && tickedInSlice === slice.length;
+        thCb.indeterminate = tickedInSlice > 0 && tickedInSlice < slice.length;
+      }
 
       if (slice.length === 0) {
         if (!all.some(x => x.id === state.focusedId)) {
@@ -1874,11 +1962,24 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
       document.getElementById("hdr-tick-btn").textContent =
         state.selectedIds.has(it.id) ? "✓ Untick" : "✓ Tick for Discord";
+      document.getElementById("hdr-done-btn").textContent =
+        isDonePending(it) ? "↩ Restore to Inbox" : "📥 Done / Hide";
       document.getElementById("hdr-wl-btn").textContent =
         isWhitelisted(it) ? "🔥 Unwhitelist" : "🔥 Whitelist";
 
       document.getElementById("card-heading").textContent = `Card for ${star}${it.title}`;
       document.getElementById("card-tier-pill").textContent = formatStatusCell(it);
+
+      const forgeTitleMap = {
+        github: "GitHub Repository",
+        gitlab: "GitLab Repository",
+        forgejo: (it.forgeHost === "codeberg.org" ? "Codeberg Repository" : "Forgejo / Gitea Repository"),
+        srht: "SourceHut Repository",
+        bitbucket: "Bitbucket Repository",
+        pagure: "Pagure Repository",
+        sourceforge: "SourceForge Project",
+      };
+      const repoLabel = forgeTitleMap[it.forge] || "Repository";
 
       let detailsHtml = "";
       if (it.kind === "repo") {
@@ -1891,12 +1992,12 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           : "";
 
         if (!sInfo.isHeur) {
-          detailsHtml += `<div class="tb-src-banner-ok">✅ GitHub URL is directly in the FMHY listing${resolvedLine}</div>`;
+          detailsHtml += `<div class="tb-src-banner-ok">✅ Repository URL is directly in the FMHY listing${resolvedLine}</div>`;
         } else {
           const heurExplain = sInfo.full.replace(/^⚠️\s*NOT in FMHY\s*—\s*/i, "");
-          detailsHtml += `<div class="tb-src-banner-warn">⚠️ No GitHub URL in FMHY listing — inferred via heuristic (${escapeHtml(heurExplain)})${resolvedLine}</div>`;
+          detailsHtml += `<div class="tb-src-banner-warn">⚠️ No repository URL in FMHY listing — inferred via heuristic (${escapeHtml(heurExplain)})${resolvedLine}</div>`;
         }
-        detailsHtml += `<div class="tb-detail-row"><strong>GitHub Repository:</strong> ${renderSafeLink(it.htmlUrl, it.htmlUrl, "", false)}</div>`;
+        detailsHtml += `<div class="tb-detail-row"><strong>${escapeHtml(repoLabel)}:</strong> ${renderSafeLink(it.htmlUrl, it.htmlUrl, "", false)}</div>`;
       } else {
         detailsHtml += `<div class="tb-src-banner-ok">✅ Website URL is directly in the FMHY listing</div>`;
         detailsHtml += `<div class="tb-detail-row"><strong>Target URL:</strong> ${renderSafeLink(it.siteUrl, it.siteUrl, "", false)}</div>`;
@@ -1908,7 +2009,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         detailsHtml += `<div class="tb-detail-row"><strong>Archived When:</strong> <strong>${escapeHtml(archAgeTxt)} ago</strong> (${escapeHtml(it.archivedAt)})</div>`;
       }
       if (ageTxt) {
-        if (tier === "missing" && !it.isDisabled) {
+        if (it.kind === "site") {
+          const seenDateTxt = it.lastActivityAt ? ` (last active ${escapeHtml(it.lastActivityAt)})` : "";
+          detailsHtml += `<div class="tb-detail-row"><strong>Last Active (Wayback / CT DNS):</strong> <strong>${escapeHtml(ageTxt)} ago</strong>${seenDateTxt}</div>`;
+        } else if (tier === "missing" && !it.isDisabled) {
           const seenDateTxt = it.lastActivityAt ? ` (last seen alive ${escapeHtml(it.lastActivityAt)})` : "";
           detailsHtml += `<div class="tb-detail-row"><strong>Wayback / Last Seen Alive:</strong> <strong>${escapeHtml(ageTxt)} ago</strong>${seenDateTxt}</div>`;
         } else {
@@ -1990,11 +2094,11 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       if (selected.length === 0) return "";
 
       const groups = [
-        { title: "Dead / 404 / DMCA GitHub Repos", filter: it => it.kind === "repo" && effectiveTier(it) === "missing" },
+        { title: "Dead / 404 / DMCA Repositories", filter: it => it.kind === "repo" && effectiveTier(it) === "missing" },
         { title: "Archived Repos (New Repo Found)", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && it.replacementUrl },
-        { title: "Archived GitHub Repos", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && !it.replacementUrl },
-        { title: "Inactive GitHub Repos", filter: it => it.kind === "repo" && !["missing", "archived"].includes(effectiveTier(it)) },
-        { title: "Dead / Parked Websites", filter: it => it.kind === "site" },
+        { title: "Archived Repositories", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && !it.replacementUrl },
+        { title: "Inactive Repositories", filter: it => it.kind === "repo" && !["missing", "archived"].includes(effectiveTier(it)) },
+        { title: "Dead / Parked Websites & Domains", filter: it => it.kind === "site" },
       ];
 
       const lines = ["## FMHY Drift Report"];
@@ -2064,10 +2168,81 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     function toggleFocusedTick() {
       if (!state.focusedId) return;
-      if (state.selectedIds.has(state.focusedId)) state.selectedIds.delete(state.focusedId);
-      else state.selectedIds.add(state.focusedId);
+      const it = state.items.find(x => x.id === state.focusedId);
+      if (state.selectedIds.has(state.focusedId)) {
+        state.selectedIds.delete(state.focusedId);
+      } else {
+        state.selectedIds.add(state.focusedId);
+        // Ticking an item from Done / Pending brings it back into active Outbox
+        if (it && isDonePending(it)) {
+          state.doneKeys.delete(it.wlKey);
+          if (it.origKey) state.doneKeys.delete(it.origKey);
+          state.doneKeys.delete(it.id);
+        }
+      }
       saveLocalState();
       renderAll();
+    }
+
+    function toggleFocusedDonePending() {
+      const it = state.items.find(x => x.id === state.focusedId);
+      if (!it) return;
+      const listBefore = filteredAndSortedItems();
+      const idx = listBefore.findIndex(x => x.id === it.id);
+
+      if (isDonePending(it)) {
+        state.doneKeys.delete(it.wlKey);
+        if (it.origKey) state.doneKeys.delete(it.origKey);
+        state.doneKeys.delete(it.id);
+        setStatus(`Restored "${it.title}" back to Inbox.`);
+      } else {
+        state.doneKeys.add(it.wlKey);
+        if (it.origKey && it.origKey !== it.wlKey) state.doneKeys.add(it.origKey);
+        state.selectedIds.delete(it.id);
+        setStatus(`Moved "${it.title}" to Done / Pending (hidden from Inbox).`);
+      }
+      saveLocalState();
+
+      const listAfter = filteredAndSortedItems();
+      if (listAfter.length > 0 && idx >= 0) {
+        state.focusedId = listAfter[Math.min(idx, listAfter.length - 1)].id;
+      } else if (listAfter.length === 0) {
+        state.focusedId = null;
+      }
+      renderAll();
+    }
+
+    function moveTickedToDonePending() {
+      const tickedItems = state.items.filter(it => state.selectedIds.has(it.id));
+      if (tickedItems.length === 0) {
+        // If nothing is ticked, convenience-fallback to moving the currently focused row
+        if (state.focusedId) {
+          toggleFocusedDonePending();
+        } else {
+          setStatus("No ticked items to move to Done / Pending.");
+        }
+        return;
+      }
+      for (const it of tickedItems) {
+        state.doneKeys.add(it.wlKey);
+        if (it.origKey && it.origKey !== it.wlKey) state.doneKeys.add(it.origKey);
+        state.selectedIds.delete(it.id);
+      }
+      saveLocalState();
+      renderAll();
+      setStatus(`Moved ${tickedItems.length} ticked item(s) to Done / Pending and cleared ticks.`);
+    }
+
+    function restoreAllDonePending() {
+      const cnt = state.doneKeys.size;
+      if (cnt === 0) {
+        setStatus("Done / Pending folder is already empty.");
+        return;
+      }
+      state.doneKeys.clear();
+      saveLocalState();
+      renderAll();
+      setStatus("Restored all items from Done / Pending back to Inbox.");
     }
 
     function toggleFocusedWhitelist() {
@@ -2140,6 +2315,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       } else if (e.key === " ") {
         e.preventDefault();
         toggleFocusedTick();
+      } else if (e.key === "d" || e.key === "D" || e.key === "p" || e.key === "P") {
+        e.preventDefault();
+        toggleFocusedDonePending();
       } else if (e.key === "j" || e.key === "J") {
         e.preventDefault();
         toggleFocusedWhitelist();
@@ -2150,12 +2328,36 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     document.getElementById("btn-reload").onclick = () => loadData();
     document.getElementById("btn-toggle-tick").onclick = () => toggleFocusedTick();
     document.getElementById("hdr-tick-btn").onclick = () => toggleFocusedTick();
+    document.getElementById("btn-ticked-done").onclick = () => moveTickedToDonePending();
+    document.getElementById("menu-ticked-done").onclick = () => moveTickedToDonePending();
+    document.getElementById("outbox-move-done-btn").onclick = () => moveTickedToDonePending();
+    document.getElementById("hdr-done-btn").onclick = () => toggleFocusedDonePending();
+    document.getElementById("menu-restore-done").onclick = () => restoreAllDonePending();
+    document.getElementById("outbox-untick-btn").onclick = () => {
+      state.selectedIds.clear();
+      saveLocalState();
+      renderAll();
+      setStatus("Cleared all ticks.");
+    };
+    document.getElementById("th-cb-all").onclick = (e) => {
+      e.stopPropagation();
+      const all = filteredAndSortedItems();
+      const slice = all.slice(state.page * PAGE_SIZE, (state.page + 1) * PAGE_SIZE);
+      const allTicked = slice.length > 0 && slice.every(it => state.selectedIds.has(it.id));
+      for (const it of slice) {
+        if (allTicked) state.selectedIds.delete(it.id);
+        else state.selectedIds.add(it.id);
+      }
+      saveLocalState();
+      renderAll();
+    };
     document.getElementById("btn-junk-wl").onclick = () => toggleFocusedWhitelist();
     document.getElementById("hdr-wl-btn").onclick = () => toggleFocusedWhitelist();
 
     document.getElementById("search").oninput = () => { state.page = 0; renderTable(); renderInspector(); };
     document.getElementById("starred-only").onchange = () => { state.page = 0; renderTable(); renderInspector(); };
     document.getElementById("has-web-only").onchange = () => { state.page = 0; renderTable(); renderInspector(); };
+    document.getElementById("forge-filter").onchange = () => { state.page = 0; renderTable(); renderInspector(); };
     document.getElementById("source-filter").onchange = () => { state.page = 0; renderTable(); renderInspector(); };
 
     function parseNonNegInt(val, fallback) {

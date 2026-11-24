@@ -1,10 +1,10 @@
 # fmhy-drift
 
-Checks the [FMHY](https://fmhy.net) index (`api.fmhy.net/single-page`) for dead sites and dead, archived, or inactive GitHub repositories.
+Checks the [FMHY](https://fmhy.net) index (`api.fmhy.net/single-page`) for dead sites/DNS and dead, archived, inactive, or vulnerable repositories across GitHub, GitLab, Codeberg/Forgejo/Gitea, SourceHut (`sr.ht`), Bitbucket, Pagure, and SourceForge.
 
-- **Triage & Discord Report UI**: [melo-foundation.github.io/fmhy-drift](https://melo-foundation.github.io/fmhy-drift/) — filter by Dead (`404`/`451`/disabled), Archived (with auto-detected replacement repo links), Severe Vulns (`CRITICAL`/`HIGH`), Dead/Parked DNS, or custom `> X` days inactive; tick items to send a curated report to a Discord webhook; and save false positives to [`whitelist.json`](whitelist.json).
-- **GitHub & OSV check**: Queries linked `github.com` repos (plus repos inferred from `*.github.io`, `raw.githubusercontent.com`, `jsdelivr`, `githack`, and `statically` URLs) via batched GraphQL, scans archived repo descriptions/READMEs for successor links, and checks stale/archived repos + root manifests against [OSV.dev](https://osv.dev) for unpatched `HIGH`/`CRITICAL` advisories.
-- **Site liveness & DNS check**: Direct HTTP site scraping only runs when `PROXY_URL` is set (verifying egress IP differs from the runner IP); otherwise, a proxy-free Cloudflare + Google DoH check flags `NXDOMAIN`, sinkholed, and parked domains without contacting target hosts.
+- **Triage & Discord Report UI**: [melo-foundation.github.io/fmhy-drift](https://melo-foundation.github.io/fmhy-drift/) — filter by forge, Dead (`404`/`451`/disabled), Moved/New Repo (including author's active similar-named repos), Severe Vulns (`CRITICAL`/`HIGH`), Dead/Parked DNS (with Wayback + Certificate Transparency last-active dates), or custom `> X` days inactive; move handled batches into local **Done / Pending**; send curated reports to Discord; and sync false positives to [`whitelist.json`](whitelist.json).
+- **Multi-forge & OSV check**: Queries GitHub (batched GraphQL), GitLab (`gitlab.com` + self-hosted FOSS instances), Codeberg/Forgejo/Gitea, SourceHut, Bitbucket, Pagure, and SourceForge; scans archived/dead repos and owner/contributor profiles for replacement repos; and checks stale/archived repos + root manifests against [OSV.dev](https://osv.dev) for `HIGH`/`CRITICAL` advisories.
+- **Site liveness & DNS check**: Direct HTTP site scraping only runs when `PROXY_URL` is set (verifying egress IP differs from the runner IP); otherwise, a proxy-free Cloudflare + Google DoH check flags `NXDOMAIN`, bogon/sinkholed, and parked domains and enriches last-active dates via Wayback CDX + CT logs (`crt.sh`) without contacting target hosts.
 
 ## GitHub Actions
 

@@ -4,21 +4,26 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fmhy_drift.dns_checker import DnsDeadChecker
-from fmhy_drift.github_checker import SOURCE_PRIORITY, GitHubActivityChecker
+from fmhy_drift.alt_forge_checker import AltForgeActivityChecker
+from fmhy_drift.dns_checker import DnsDeadChecker, enrich_unhealthy_sites_last_active
+from fmhy_drift.github_checker import SOURCE_PRIORITY, GitHubActivityChecker, _parse_iso_datetime
 from fmhy_drift.models import (
     DriftReport,
     EntryDriftResult,
     GitHubRef,
     ProxyVerification,
     RepoActivityResult,
+    RepoVuln,
     SiteCheckResult,
+    SiteStatus,
+    StalenessTier,
     TierThresholds,
     WikiEntry,
 )
@@ -95,7 +100,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--vuln-check",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Check stale and archived GitHub repositories for HIGH/CRITICAL vulnerabilities via OSV.dev (default: enabled).",
+        help="Check stale and archived repositories across GitHub/GitLab/Codeberg/Bitbucket for HIGH/CRITICAL vulnerabilities via OSV.dev (default: enabled).",
+    )
+    parser.add_argument(
+        "--reuse-report",
+        type=Path,
+        default=None,
+        help="Optional path to a previous fmhy-drift-report.json to reuse cached GitHub and DNS results.",
+    )
+    parser.add_argument(
+        "--only-alt-forges",
+        action="store_true",
+        help="When combined with --reuse-report, only scan non-GitHub code forges (GitLab, Codeberg, sr.ht, etc.) + enrich dead/archived metadata.",
     )
     parser.add_argument(
         "--whitelist",
@@ -251,6 +267,95 @@ def _write_github_step_summary(markdown_text: str) -> None:
         path.write_text(markdown_text, encoding="utf-8")
 
 
+def _load_reused_report(
+    path: Path,
+) -> tuple[dict[str, RepoActivityResult], dict[str, SiteCheckResult], int, int]:
+    """Load cached GitHub `RepoActivityResult`s, `SiteCheckResult`s, `unique_sites_checked`, and `unique_gh_repos` from `fmhy-drift-report.json`."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    repo_cache: dict[str, RepoActivityResult] = {}
+    site_cache: dict[str, SiteCheckResult] = {}
+    summary = raw.get("summary") or {}
+    prev_sites = int(summary.get("unique_sites_checked") or 0)
+    prev_repos = int(summary.get("unique_repos_checked") or 0)
+
+    for entry in raw.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        for sr in entry.get("sites") or []:
+            if not isinstance(sr, dict) or not sr.get("url"):
+                continue
+            try:
+                st = SiteStatus(sr["status"])
+            except Exception:
+                continue
+            site_cache.setdefault(
+                sr["url"],
+                SiteCheckResult(
+                    url=sr["url"],
+                    status=st,
+                    http_status=sr.get("http_status"),
+                    final_url=sr.get("final_url"),
+                    elapsed_ms=int(sr.get("elapsed_ms") or 0),
+                    reason=str(sr.get("reason") or ""),
+                    last_seen_at=_parse_iso_datetime(sr.get("last_seen_at")),
+                    inactive_days=sr.get("inactive_days"),
+                ),
+            )
+        for rr in entry.get("github_repos") or []:
+            if not isinstance(rr, dict):
+                continue
+            forge = str(rr.get("forge") or "github")
+            forge_host = str(rr.get("forge_host") or "github.com")
+            if forge != "github":
+                continue
+            full_name = str(rr.get("full_name") or "")
+            req_full = str(rr.get("requested_full_name") or full_name)
+            if "/" not in req_full:
+                continue
+            owner, repo = req_full.split("/", 1)
+            try:
+                tier = StalenessTier(rr["tier"])
+            except Exception:
+                continue
+            vulns = [
+                RepoVuln(
+                    vuln_id=str(v.get("vuln_id") or ""),
+                    severity=v.get("severity") if v.get("severity") in {"CRITICAL", "HIGH"} else "HIGH",  # type: ignore[arg-type]
+                    summary=str(v.get("summary") or ""),
+                    package_name=v.get("package_name"),
+                    advisory_url=str(v.get("advisory_url") or ""),
+                )
+                for v in (rr.get("vulns") or [])
+                if isinstance(v, dict) and v.get("vuln_id")
+            ]
+            obj = RepoActivityResult(
+                owner=owner,
+                repo=repo,
+                tier=tier,
+                last_activity_at=_parse_iso_datetime(rr.get("last_activity_at")),
+                inactive_days=rr.get("inactive_days"),
+                archived_at=_parse_iso_datetime(rr.get("archived_at")),
+                archived_days=rr.get("archived_days"),
+                is_archived=bool(rr.get("is_archived")),
+                is_disabled=bool(rr.get("is_disabled")),
+                latest_release_tag=rr.get("latest_release_tag"),
+                canonical_full_name=full_name or None,
+                canonical_html_url=rr.get("html_url"),
+                homepage_url=rr.get("homepage_url"),
+                replacement_url=rr.get("replacement_url"),
+                replacement_status=rr.get("replacement_status"),
+                vulns=vulns,
+                reason=str(rr.get("reason") or ""),
+                forge=forge,
+                forge_host=forge_host,
+            )
+            repo_cache.setdefault(req_full.lower(), obj)
+            if full_name:
+                repo_cache.setdefault(full_name.lower(), obj)
+
+    return repo_cache, site_cache, prev_sites, prev_repos
+
+
 async def run_drift_pipeline(args: argparse.Namespace) -> int:
     thresholds = TierThresholds(
         tier1_days=args.warn_days_1,
@@ -333,12 +438,48 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         max_entries=args.max_entries,
     )
 
+    reused_gh_map: dict[str, RepoActivityResult] = {}
+    reused_site_map: dict[str, SiteCheckResult] = {}
+    prev_unique_sites = 0
+    prev_unique_gh_repos = 0
+    incremental_alt_only = bool(
+        args.only_alt_forges and args.reuse_report and args.reuse_report.is_file()
+    )
+
+    if incremental_alt_only and args.reuse_report is not None:
+        (
+            reused_gh_map,
+            reused_site_map,
+            prev_unique_sites,
+            prev_unique_gh_repos,
+        ) = _load_reused_report(args.reuse_report)
+        print(
+            f"♻️ Incremental alt-forge mode: loaded {len(reused_gh_map)} cached GitHub repo keys "
+            f"and {len(reused_site_map)} flagged DNS/site results from {args.reuse_report}.",
+            flush=True,
+        )
+
     # 3. Site checks: full HTTP via verified proxy, OR proxy-free DoH DNS check
     site_results_map: dict[str, SiteCheckResult] = {}
     unique_site_count = 0
     whitelisted_sites_skipped = 0
 
-    if run_site_checks and proxy_url is not None:
+    if incremental_alt_only:
+        raw_urls = list(dict.fromkeys(u for e in entries for u in e.site_urls))
+        whitelisted_sites_skipped = sum(1 for u in raw_urls if whitelist.is_url_whitelisted(u))
+        unique_site_count = prev_unique_sites or (len(raw_urls) - whitelisted_sites_skipped)
+        site_results_map = {
+            u: sr
+            for u, sr in reused_site_map.items()
+            if not whitelist.is_url_whitelisted(u)
+        }
+        if any(sr.is_unhealthy and sr.last_seen_at is None for sr in site_results_map.values()):
+            print(
+                f"Enriching {len(site_results_map)} cached dead/parked DNS domains with Wayback + CT last-active dates...",
+                flush=True,
+            )
+            site_results_map = await enrich_unhealthy_sites_last_active(site_results_map)
+    elif run_site_checks and proxy_url is not None:
         raw_urls = list(dict.fromkeys(u for e in entries for u in e.site_urls))
         urls_to_check = [u for u in raw_urls if not whitelist.is_url_whitelisted(u)]
         whitelisted_sites_skipped = len(raw_urls) - len(urls_to_check)
@@ -372,9 +513,9 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             flush=True,
         )
     else:
-        print(f"Loaded {len(entries)} FMHY entries with linked GitHub repositories.", flush=True)
+        print(f"Loaded {len(entries)} FMHY entries with linked repositories.", flush=True)
 
-    # 4. Merge explicit FMHY GitHub refs + homepage auto-discovered refs, excluding whitelisted repos
+    # 4. Merge explicit FMHY repo refs + homepage auto-discovered refs, excluding whitelisted repos
     entry_all_refs: list[list[GitHubRef]] = []
     combined_refs_for_api: list[GitHubRef] = []
     whitelisted_repo_keys_seen: set[str] = set()
@@ -384,7 +525,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         seen_keys: set[str] = set()
 
         candidates_for_entry = list(entry.github_refs)
-        if run_site_checks and args.discover_github:
+        if run_site_checks and args.discover_github and not incremental_alt_only:
             raw_candidates: list[GitHubRef] = []
             for u in entry.site_urls:
                 sr = site_results_map.get(u)
@@ -393,7 +534,9 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             candidates_for_entry.extend(filter_discovered_for_entry(entry, raw_candidates))
 
         for cand in candidates_for_entry:
-            if whitelist.is_repo_whitelisted(cand.owner, cand.repo):
+            if whitelist.is_repo_key_whitelisted(cand.key) or whitelist.is_repo_whitelisted(
+                cand.owner, cand.repo, cand.forge_host
+            ):
                 whitelisted_repo_keys_seen.add(cand.key)
                 continue
             if cand.key not in seen_keys:
@@ -403,32 +546,63 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         entry_all_refs.append(merged)
         combined_refs_for_api.extend(merged)
 
-    unique_repo_count = len({r.key for r in combined_refs_for_api})
-    print(
-        f"Checking activity across {unique_repo_count} unique GitHub repositories "
-        f"({len(whitelisted_repo_keys_seen)} whitelisted skipped; "
-        f"thresholds: {thresholds.tier1_days}d / {thresholds.tier2_days}d / {thresholds.tier3_days}d)...",
-        flush=True,
-    )
+    gh_refs_for_api = [r for r in combined_refs_for_api if r.forge == "github"]
+    alt_refs_for_api = [r for r in combined_refs_for_api if r.forge != "github"]
+    unique_gh_count = len({r.key for r in gh_refs_for_api})
+    unique_alt_count = len({r.key for r in alt_refs_for_api})
 
-    # 5. Check GitHub activity, archival status, and archived replacement links
+    # 5. Check GitHub + Non-GitHub Forge activity, archival status, replacements, and OSV vulns
     gh_checker = GitHubActivityChecker(
         thresholds=thresholds,
         github_token=args.github_token or None,
         proxy_url=proxy_url if (args.proxy_github and proxy_url) else None,
     )
-    repo_results_map = await gh_checker.check_repos(combined_refs_for_api)
+    alt_checker = AltForgeActivityChecker(thresholds=thresholds)
 
-    if args.vuln_check and repo_results_map:
+    if incremental_alt_only:
         print(
-            "Scanning stale & archived repositories for HIGH/CRITICAL vulnerabilities (OSV.dev)...",
+            f"Skipping full GitHub scan (reusing cached GitHub results); enriching dead/archived GitHub author repos "
+            f"and checking {unique_alt_count} non-GitHub forge repositories (GitLab/Codeberg/sr.ht/Bitbucket/Pagure/SourceForge)...",
             flush=True,
         )
-        vuln_checker = RepoVulnChecker(
-            github_token=args.github_token or None,
-            min_inactive_days=thresholds.tier1_days,
+        gh_results_map = await gh_checker.enrich_dead_and_archived_author_repos(reused_gh_map)
+        alt_results_map = await alt_checker.check_repos(alt_refs_for_api)
+        if args.vuln_check and alt_results_map:
+            print(
+                "Scanning stale & archived non-GitHub forge repositories for HIGH/CRITICAL vulnerabilities (OSV.dev)...",
+                flush=True,
+            )
+            vuln_checker = RepoVulnChecker(
+                github_token=args.github_token or None,
+                min_inactive_days=thresholds.tier1_days,
+            )
+            alt_results_map = await vuln_checker.enrich_repo_vulns(alt_results_map)
+        repo_results_map = {**gh_results_map, **alt_results_map}
+        unique_repo_count = (prev_unique_gh_repos or unique_gh_count) + unique_alt_count
+    else:
+        unique_repo_count = unique_gh_count + unique_alt_count
+        print(
+            f"Checking activity across {unique_gh_count} GitHub + {unique_alt_count} non-GitHub forge repositories "
+            f"({len(whitelisted_repo_keys_seen)} whitelisted skipped; "
+            f"thresholds: {thresholds.tier1_days}d / {thresholds.tier2_days}d / {thresholds.tier3_days}d)...",
+            flush=True,
         )
-        repo_results_map = await vuln_checker.enrich_repo_vulns(repo_results_map)
+        gh_results_map, alt_results_map = await asyncio.gather(
+            gh_checker.check_repos(gh_refs_for_api),
+            alt_checker.check_repos(alt_refs_for_api),
+        )
+        repo_results_map = {**gh_results_map, **alt_results_map}
+
+        if args.vuln_check and repo_results_map:
+            print(
+                "Scanning stale & archived repositories for HIGH/CRITICAL vulnerabilities (OSV.dev)...",
+                flush=True,
+            )
+            vuln_checker = RepoVulnChecker(
+                github_token=args.github_token or None,
+                min_inactive_days=thresholds.tier1_days,
+            )
+            repo_results_map = await vuln_checker.enrich_repo_vulns(repo_results_map)
 
     # 6. Assemble DriftReport (dropping unverified speculative `domain_heuristic` guesses)
     entry_results: list[EntryDriftResult] = []
@@ -443,15 +617,13 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             rr = repo_results_map.get(r.key)
             if rr is None:
                 continue
-            if "/" in rr.full_name:
-                canon_owner, canon_repo = rr.full_name.split("/", 1)
-                if whitelist.is_repo_whitelisted(canon_owner, canon_repo):
-                    whitelisted_repo_keys_seen.add(rr.full_name.lower())
-                    continue
+            if whitelist.is_repo_key_whitelisted(rr.full_name.lower()):
+                whitelisted_repo_keys_seen.add(rr.full_name.lower())
+                continue
             if r.source == "domain_heuristic" and rr.tier.value == "missing":
                 continue
             if (
-                r.source == "github_pages"
+                r.source in {"github_pages", "forge_pages"}
                 and rr.tier.value == "active"
                 and "backed by private" in rr.reason
             ):

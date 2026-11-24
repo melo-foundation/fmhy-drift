@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import time
+from dataclasses import replace
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 import httpx
@@ -78,7 +80,8 @@ def _is_sinkhole_ip(raw_ip: str) -> bool:
         addr = ipaddress.ip_address(raw_ip.strip())
     except ValueError:
         return False
-    return addr.is_unspecified or addr.is_loopback
+    # Catch 0.0.0.0, 127.0.0.0/8, RFC1918 private, CGNAT, link-local, TEST-NET, benchmark/registrar sinkhole IPs
+    return not addr.is_global
 
 
 def _should_skip_dns_host(host: str) -> bool:
@@ -131,10 +134,14 @@ class DnsDeadChecker:
         *,
         concurrency: int = 75,
         timeout: float = 8.0,
+        enrich_last_active: bool = True,
+        now: datetime | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.concurrency = max(1, concurrency)
         self.timeout = timeout
+        self.enrich_last_active = enrich_last_active
+        self.now = now or datetime.now(UTC)
         self._transport = transport
 
     async def check_urls(self, urls: list[str]) -> dict[str, SiteCheckResult]:
@@ -189,6 +196,13 @@ class DnsDeadChecker:
                     elapsed_ms=elapsed_ms,
                     reason=reason,
                 )
+
+        if results and self.enrich_last_active:
+            results = await enrich_unhealthy_sites_last_active(
+                results,
+                now=self.now,
+                transport=self._transport,
+            )
         return results
 
     async def _query_doh(
@@ -322,3 +336,187 @@ class DnsDeadChecker:
                 )
 
         return None
+
+
+def _parse_ct_iso(raw: str | None) -> datetime | None:
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+async def enrich_unhealthy_sites_last_active(
+    results: dict[str, SiteCheckResult],
+    *,
+    now: datetime | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict[str, SiteCheckResult]:
+    """Populate `last_seen_at` and `inactive_days` on dead/parked/TLS-broken sites via Wayback CDX & CT (`crt.sh`).
+
+    Never sends any network traffic to target websites; queries only `web.archive.org` and `crt.sh`.
+    """
+    ref_now = now or datetime.now(UTC)
+    target_urls = [
+        u
+        for u, sr in results.items()
+        if sr.is_unhealthy and sr.last_seen_at is None
+    ]
+    if not target_urls:
+        return results
+
+    host_to_urls: dict[str, list[str]] = {}
+    for u in target_urls:
+        h = (urlsplit(u).hostname or "").lower().rstrip(".")
+        if h.startswith("www."):
+            h = h[4:]
+        if h:
+            host_to_urls.setdefault(h, []).append(u)
+
+    kwargs: dict = {
+        "timeout": httpx.Timeout(7.0),
+        "follow_redirects": True,
+        "trust_env": False,
+        "headers": {"User-Agent": "fmhy-drift-checker/0.1"},
+    }
+    if transport is not None:
+        kwargs["transport"] = transport
+
+    wb_sem = asyncio.Semaphore(6)
+    ct_sem = asyncio.Semaphore(4)
+    wb_dates: dict[str, datetime] = {}
+    ct_info: dict[str, tuple[datetime | None, datetime | None]] = {}
+    wb_failures = 0
+    ct_failures = 0
+
+    async with httpx.AsyncClient(**kwargs) as client:
+
+        async def _query_wayback(u: str) -> None:
+            nonlocal wb_failures
+            if wb_failures >= 5:
+                return
+            async with wb_sem:
+                if wb_failures >= 5:
+                    return
+                try:
+                    resp = await client.get(
+                        "https://web.archive.org/cdx/search/cdx",
+                        params={
+                            "url": u,
+                            "output": "json",
+                            "fl": "timestamp,statuscode",
+                            "filter": "statuscode:200",
+                            "limit": "-1",
+                        },
+                    )
+                    if resp.status_code in {429, 503}:
+                        wb_failures = 99
+                        return
+                    if resp.status_code != 200:
+                        wb_failures += 1
+                        return
+                    wb_failures = 0
+                    rows = resp.json()
+                    if isinstance(rows, list) and len(rows) >= 2:
+                        ts = str(rows[-1][0])
+                        if len(ts) >= 8:
+                            wb_dates[u] = datetime.strptime(ts[:8], "%Y%m%d").replace(tzinfo=UTC)
+                except Exception:
+                    wb_failures += 1
+
+        async def _query_crtsh(host: str) -> None:
+            nonlocal ct_failures
+            if ct_failures >= 4 or host.endswith(NON_PUBLIC_DNS_TLDS):
+                return
+            async with ct_sem:
+                if ct_failures >= 4:
+                    return
+                try:
+                    resp = await client.get(
+                        "https://crt.sh/",
+                        params={"q": host, "output": "json"},
+                    )
+                    if resp.status_code in {429, 502, 503, 504}:
+                        ct_failures += 1
+                        return
+                    if resp.status_code != 200:
+                        return
+                    ct_failures = 0
+                    entries = resp.json()
+                    if not isinstance(entries, list) or not entries:
+                        return
+                    latest_issued: datetime | None = None
+                    latest_expiry: datetime | None = None
+                    for row in entries[:60]:
+                        if not isinstance(row, dict):
+                            continue
+                        nb = _parse_ct_iso(row.get("not_before"))
+                        na = _parse_ct_iso(row.get("not_after"))
+                        if nb and nb <= ref_now and (latest_issued is None or nb > latest_issued):
+                            latest_issued = nb
+                        if na and (latest_expiry is None or na > latest_expiry):
+                            latest_expiry = na
+                    if latest_issued or latest_expiry:
+                        ct_info[host] = (latest_issued, latest_expiry)
+                except Exception:
+                    ct_failures += 1
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *(_query_wayback(u) for u in target_urls),
+                    *(_query_crtsh(h) for h in host_to_urls),
+                ),
+                timeout=35.0,
+            )
+        except TimeoutError:
+            pass
+
+    updated = dict(results)
+    for u in target_urls:
+        sr = updated[u]
+        h = (urlsplit(u).hostname or "").lower().rstrip(".")
+        if h.startswith("www."):
+            h = h[4:]
+        wb_dt = wb_dates.get(u)
+        ct_issued, ct_expiry = ct_info.get(h, (None, None))
+
+        candidates = [d for d in (wb_dt, ct_issued) if d is not None]
+        if not candidates and ct_expiry is None:
+            continue
+
+        best_dt = max(candidates) if candidates else None
+        days = (
+            max(0, int((ref_now - best_dt).total_seconds() // 86400))
+            if best_dt is not None
+            else None
+        )
+
+        notes: list[str] = []
+        if best_dt is not None:
+            src_tag = (
+                "Wayback 200 OK"
+                if (wb_dt and best_dt == wb_dt)
+                else "CT DNS cert issued"
+            )
+            notes.append(f"last active {best_dt.strftime('%Y-%m-%d')} ({src_tag})")
+        if ct_expiry is not None and ct_expiry < ref_now:
+            notes.append(f"last TLS cert expired {ct_expiry.strftime('%Y-%m-%d')}")
+
+        new_reason = sr.reason
+        if notes and "last active " not in new_reason:
+            new_reason = f"{new_reason} — {'; '.join(notes)}"
+
+        updated[u] = replace(
+            sr,
+            last_seen_at=best_dt,
+            inactive_days=days,
+            reason=new_reason,
+        )
+
+    return updated

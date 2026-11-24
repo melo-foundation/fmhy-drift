@@ -15,6 +15,8 @@ import tomllib
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
+from urllib.parse import quote
+
 import httpx
 
 from fmhy_drift.models import RepoActivityResult, RepoVuln, StalenessTier
@@ -357,10 +359,20 @@ class RepoVulnChecker:
         if not target_keys:
             return repo_results
 
-        # 1. Fetch dependency manifests via batched GraphQL (if GITHUB_TOKEN is available)
+        # 1. Fetch dependency manifests:
+        #    a) GitHub repos via batched GraphQL (if GITHUB_TOKEN is available)
+        #    b) GitLab / Codeberg / Forgejo / Bitbucket repos via public REST tree + raw file API
         repo_deps: dict[str, list[DepSpec]] = {k: [] for k in target_keys}
-        if self.github_token:
-            await self._fetch_manifests_graphql(repo_results, target_keys, repo_deps)
+        gh_target_keys = [k for k in target_keys if repo_results[k].forge == "github"]
+        alt_target_keys = [
+            k
+            for k in target_keys
+            if repo_results[k].forge in {"gitlab", "forgejo", "bitbucket"}
+        ]
+        if gh_target_keys and self.github_token:
+            await self._fetch_manifests_graphql(repo_results, gh_target_keys, repo_deps)
+        if alt_target_keys:
+            await self._fetch_manifests_alt_forges(repo_results, alt_target_keys, repo_deps)
 
         # 2. Build deduplicated OSV querybatch list:
         #    a) Direct repo HEAD commit queries (`{"commit": oid}`)
@@ -552,6 +564,114 @@ class RepoVulnChecker:
                 for start in range(0, len(items), MANIFEST_GRAPHQL_BATCH)
             ]
             await asyncio.gather(*(_fetch_batch(b) for b in batches))
+
+    async def _fetch_manifests_alt_forges(
+        self,
+        repo_results: dict[str, RepoActivityResult],
+        alt_keys: list[str],
+        repo_deps: dict[str, list[DepSpec]],
+    ) -> None:
+        """Fetch root runtime manifests (`package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`) on GitLab/Forgejo/Bitbucket."""
+        manifest_parsers = {
+            "package.json": parse_package_json_deps,
+            "requirements.txt": parse_requirements_txt_deps,
+            "go.mod": parse_go_mod_deps,
+            "Cargo.toml": parse_cargo_toml_deps,
+        }
+        kwargs: dict = {
+            "timeout": httpx.Timeout(12.0),
+            "follow_redirects": True,
+            "trust_env": False,
+            "headers": {"User-Agent": "fmhy-drift-checker/0.1"},
+        }
+        if self._gh_transport is not None:
+            kwargs["transport"] = self._gh_transport
+
+        sem = asyncio.Semaphore(6)
+
+        async def _fetch_one(key: str, client: httpx.AsyncClient) -> None:
+            rr = repo_results[key]
+            host = rr.forge_host
+            slug = (
+                rr.full_name[len(host) + 1 :]
+                if rr.full_name.lower().startswith(f"{host.lower()}/")
+                else f"{rr.owner}/{rr.repo}"
+            )
+            deps: list[DepSpec] = []
+            async with sem:
+                try:
+                    if rr.forge == "gitlab":
+                        enc = quote(slug, safe="")
+                        tree_resp = await client.get(
+                            f"https://{host}/api/v4/projects/{enc}/repository/tree",
+                            params={"per_page": "100"},
+                        )
+                        if tree_resp.status_code != 200 or not isinstance(tree_resp.json(), list):
+                            return
+                        present = {
+                            str(item.get("name"))
+                            for item in tree_resp.json()
+                            if isinstance(item, dict) and item.get("type") == "blob"
+                        }
+                        for fname, parser_fn in manifest_parsers.items():
+                            if fname not in present:
+                                continue
+                            raw_r = await client.get(
+                                f"https://{host}/api/v4/projects/{enc}/repository/files/{quote(fname, safe='')}/raw",
+                                params={"ref": "HEAD"},
+                            )
+                            if raw_r.status_code == 200 and len(raw_r.content) <= MAX_MANIFEST_BYTES:
+                                deps.extend(parser_fn(raw_r.text))
+                    elif rr.forge == "forgejo":
+                        contents_resp = await client.get(
+                            f"https://{host}/api/v1/repos/{slug}/contents"
+                        )
+                        if contents_resp.status_code != 200 or not isinstance(
+                            contents_resp.json(), list
+                        ):
+                            return
+                        present_sizes = {
+                            str(item.get("name")): int(item.get("size") or 0)
+                            for item in contents_resp.json()
+                            if isinstance(item, dict) and item.get("type") == "file"
+                        }
+                        for fname, parser_fn in manifest_parsers.items():
+                            sz = present_sizes.get(fname)
+                            if sz is None or sz > MAX_MANIFEST_BYTES:
+                                continue
+                            raw_r = await client.get(
+                                f"https://{host}/api/v1/repos/{slug}/raw/{fname}"
+                            )
+                            if raw_r.status_code == 200:
+                                deps.extend(parser_fn(raw_r.text))
+                    elif rr.forge == "bitbucket":
+                        src_resp = await client.get(
+                            f"https://api.bitbucket.org/2.0/repositories/{slug}/src",
+                            params={"pagelen": "100"},
+                        )
+                        if src_resp.status_code != 200 or not isinstance(src_resp.json(), dict):
+                            return
+                        vals = src_resp.json().get("values") or []
+                        raw_links: dict[str, str] = {}
+                        for item in vals:
+                            if not isinstance(item, dict) or item.get("type") != "commit_file":
+                                continue
+                            p = str(item.get("path") or "")
+                            if p in manifest_parsers and int(item.get("size") or 0) <= MAX_MANIFEST_BYTES:
+                                href = ((item.get("links") or {}).get("self") or {}).get("href")
+                                if isinstance(href, str):
+                                    raw_links[p] = href
+                        for fname, href in raw_links.items():
+                            raw_r = await client.get(href)
+                            if raw_r.status_code == 200:
+                                deps.extend(manifest_parsers[fname](raw_r.text))
+                except Exception:
+                    return
+            if deps:
+                repo_deps[key] = deps
+
+        async with httpx.AsyncClient(**kwargs) as client:
+            await asyncio.gather(*(_fetch_one(k, client) for k in alt_keys))
 
     async def _run_osv_querybatch(
         self,

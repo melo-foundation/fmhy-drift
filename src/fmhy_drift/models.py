@@ -34,6 +34,7 @@ class StalenessTier(StrEnum):
 GitHubRefSource = Literal[
     "explicit_markdown",
     "github_pages",
+    "forge_pages",
     "github_cdn",
     "domain_heuristic",
     "discovered_on_site",
@@ -69,25 +70,35 @@ class TierThresholds:
 
 @dataclass(frozen=True)
 class GitHubRef:
-    """Reference to a GitHub repository linked from FMHY or discovered on a live site."""
+    """Reference to a Git/code forge repository (GitHub, GitLab, Codeberg, sr.ht, etc.)."""
 
     owner: str
     repo: str
     source: GitHubRefSource
     discovered_from_url: str | None = None
     entry_title: str | None = None
+    forge: str = "github"
+    forge_host: str = "github.com"
 
     @property
     def full_name(self) -> str:
-        return f"{self.owner}/{self.repo}"
+        if self.forge == "github":
+            return f"{self.owner}/{self.repo}"
+        if self.forge == "sourceforge":
+            return f"sourceforge.net/projects/{self.repo}"
+        return f"{self.forge_host}/{self.owner}/{self.repo}"
 
     @property
     def key(self) -> str:
-        return f"{self.owner.lower()}/{self.repo.lower()}"
+        return self.full_name.lower()
 
     @property
     def html_url(self) -> str:
-        return f"https://github.com/{self.owner}/{self.repo}"
+        if self.forge == "github":
+            return f"https://github.com/{self.owner}/{self.repo}"
+        if self.forge == "sourceforge":
+            return f"https://sourceforge.net/projects/{self.repo}"
+        return f"https://{self.forge_host}/{self.owner}/{self.repo}"
 
 
 @dataclass
@@ -108,7 +119,7 @@ class WikiEntry:
 
 @dataclass
 class SiteCheckResult:
-    """Liveness check outcome for a single URL (executed strictly via proxy)."""
+    """Liveness check outcome for a single URL (via proxy or proxy-free DoH DNS)."""
 
     url: str
     status: SiteStatus
@@ -116,6 +127,8 @@ class SiteCheckResult:
     final_url: str | None = None
     elapsed_ms: int = 0
     reason: str = ""
+    last_seen_at: datetime | None = None
+    inactive_days: int | None = None
     discovered_githubs: list[GitHubRef] = field(default_factory=list)
 
     @property
@@ -154,20 +167,46 @@ class RepoActivityResult:
     latest_release_tag: str | None = None
     head_commit_oid: str | None = None
     canonical_full_name: str | None = None
+    canonical_html_url: str | None = None
     homepage_url: str | None = None
     description: str = ""
     replacement_url: str | None = None
     replacement_status: str | None = None
     vulns: list[RepoVuln] = field(default_factory=list)
     reason: str = ""
+    forge: str = "github"
+    forge_host: str = "github.com"
 
     @property
     def full_name(self) -> str:
-        return self.canonical_full_name or f"{self.owner}/{self.repo}"
+        if self.canonical_full_name:
+            return self.canonical_full_name
+        if self.forge == "github":
+            return f"{self.owner}/{self.repo}"
+        if self.forge == "sourceforge":
+            return f"sourceforge.net/projects/{self.repo}"
+        return f"{self.forge_host}/{self.owner}/{self.repo}"
+
+    @property
+    def requested_key(self) -> str:
+        if self.forge == "github":
+            return f"{self.owner.lower()}/{self.repo.lower()}"
+        if self.forge == "sourceforge":
+            return f"sourceforge.net/projects/{self.repo.lower()}"
+        return f"{self.forge_host.lower()}/{self.owner.lower()}/{self.repo.lower()}"
 
     @property
     def html_url(self) -> str:
-        return f"https://github.com/{self.full_name}"
+        if self.canonical_html_url:
+            return self.canonical_html_url
+        if self.forge == "github":
+            return f"https://github.com/{self.full_name}"
+        if self.forge == "sourceforge":
+            return f"https://sourceforge.net/projects/{self.repo}"
+        fn = self.full_name
+        if fn.lower().startswith(f"{self.forge_host.lower()}/"):
+            return f"https://{fn}"
+        return f"https://{self.forge_host}/{fn}"
 
     @property
     def is_flagged(self) -> bool:
@@ -182,7 +221,14 @@ class RepoActivityResult:
 
 def is_github_pages_url(url: str) -> bool:
     host = (urlsplit(url).hostname or "").lower()
-    return host.endswith(".github.io")
+    return (
+        host.endswith(".github.io")
+        or host.endswith(".gitlab.io")
+        or host.endswith(".codeberg.page")
+        or host.endswith(".bitbucket.io")
+        or host.endswith(".sourceforge.io")
+        or ".pages.gitlab." in host
+    )
 
 
 @dataclass
@@ -223,8 +269,9 @@ class EntryDriftResult:
         if rr and rr.homepage_url:
             hp = rr.homepage_url.strip()
             hp_host = (urlsplit(hp).hostname or "").lower()
-            # Don't attach homepage_url if it just points back to github.com/owner/repo
-            if hp_host not in {"github.com", "www.github.com"}:
+            # Don't attach homepage_url if it just points back to the repo host itself
+            same_repo_url = hp.rstrip("/").lower() == rr.html_url.rstrip("/").lower()
+            if hp_host not in {"github.com", "www.github.com"} and not same_repo_url:
                 key = hp.rstrip("/").lower()
                 if key not in seen:
                     seen.add(key)

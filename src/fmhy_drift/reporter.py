@@ -133,6 +133,7 @@ def _entry_location(item: EntryDriftResult) -> str:
 SOURCE_LABELS: dict[str, str] = {
     "explicit_markdown": "Listed in FMHY",
     "github_pages": "Guessed: github.io (not in FMHY)",
+    "forge_pages": "Guessed: Forge Pages (not in FMHY)",
     "github_cdn": "Guessed: raw/CDN (not in FMHY)",
     "domain_heuristic": "Guessed: subdomain (not in FMHY)",
     "discovered_on_site": "Scraped on site (not in FMHY)",
@@ -140,7 +141,7 @@ SOURCE_LABELS: dict[str, str] = {
 
 
 def _repo_source_label(item: EntryDriftResult, rr: RepoActivityResult) -> str:
-    req_key = f"{rr.owner.lower()}/{rr.repo.lower()}"
+    req_key = rr.requested_key
     canon_key = rr.full_name.lower()
     raw_src = next(
         (ref.source for ref in item.all_github_refs if ref.key in {req_key, canon_key}),
@@ -278,6 +279,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
             for rr in matched_repos:
                 src_lbl = _repo_source_label(item, rr)
                 web_str = _format_web_links_inline(item, rr)
+                repl_str = _format_replacement_inline(rr)
                 if "last archived alive" in rr.reason:
                     base_reason = rr.reason.split(" — last archived alive", 1)[0]
                     if rr.inactive_days is not None:
@@ -291,7 +293,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                         base_reason = rr.reason.replace("last archived alive", "last seen alive")
                         age_note = ""
                     lines.append(
-                        f"  - 💀 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {base_reason}{age_note}{web_str}"
+                        f"  - 💀 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {base_reason}{age_note}{web_str}{repl_str}"
                     )
                 else:
                     age_note = ""
@@ -303,7 +305,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                         )
                         age_note = f" — **{format_duration_human(rr.inactive_days)}** without updates{last_str}"
                     lines.append(
-                        f"  - 💀 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {rr.reason}{age_note}{web_str}"
+                        f"  - 💀 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {rr.reason}{age_note}{web_str}{repl_str}"
                     )
 
     # Section 2: Archived GitHub Repositories (longest unupdated at the top)
@@ -525,6 +527,10 @@ def render_json_report(report: DriftReport) -> str:
                         "http_status": sr.http_status,
                         "final_url": sr.final_url,
                         "elapsed_ms": sr.elapsed_ms,
+                        "last_seen_at": (
+                            sr.last_seen_at.isoformat() if sr.last_seen_at else None
+                        ),
+                        "inactive_days": sr.inactive_days,
                         "reason": sr.reason,
                     }
                     for sr in item.site_results
@@ -532,7 +538,17 @@ def render_json_report(report: DriftReport) -> str:
                 "github_repos": [
                     {
                         "full_name": rr.full_name,
-                        "requested_full_name": f"{rr.owner}/{rr.repo}",
+                        "requested_full_name": (
+                            f"{rr.owner}/{rr.repo}"
+                            if rr.forge == "github"
+                            else (
+                                f"sourceforge.net/projects/{rr.repo}"
+                                if rr.forge == "sourceforge"
+                                else f"{rr.forge_host}/{rr.owner}/{rr.repo}"
+                            )
+                        ),
+                        "forge": rr.forge,
+                        "forge_host": rr.forge_host,
                         "html_url": rr.html_url,
                         "tier": rr.tier.value,
                         "inactive_days": rr.inactive_days,
@@ -564,7 +580,7 @@ def render_json_report(report: DriftReport) -> str:
                                 for ref in item.all_github_refs
                                 if ref.key
                                 in {
-                                    f"{rr.owner.lower()}/{rr.repo.lower()}",
+                                    rr.requested_key,
                                     rr.full_name.lower(),
                                 }
                             ),

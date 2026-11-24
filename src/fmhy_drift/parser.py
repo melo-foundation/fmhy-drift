@@ -175,11 +175,152 @@ PAGES_ROUTE_SEGMENTS = frozenset(
 DIRECT_REPO_LABELS = frozenset(
     {
         "github",
+        "gitlab",
+        "codeberg",
+        "gitea",
+        "forgejo",
+        "bitbucket",
+        "sourcehut",
+        "sr.ht",
+        "sourceforge",
+        "pagure",
         "source",
         "source code",
         "repo",
         "repository",
         "code",
+        "git",
+    }
+)
+
+# Public / official FOSS GitLab instances linked in FMHY
+GITLAB_HOSTS = frozenset(
+    {
+        "gitlab.com",
+        "gitlab.gnome.org",
+        "gitlab.freedesktop.org",
+        "gitlab.futo.org",
+        "invent.kde.org",
+        "gitlab.torproject.org",
+        "gitlab.redox-os.org",
+        "gitlab.zrythm.org",
+        "framagit.org",
+        "0xacab.org",
+        "salsa.debian.org",
+        "heptapod.net",
+        "gitgud.io",
+        "code.briarproject.org",
+        "git.jami.net",
+        "git.openprivacy.ca",
+        "i2pgit.org",
+    }
+)
+
+GITLAB_NON_REPO_FIRST_SEGMENTS = frozenset(
+    {
+        "-",
+        "about",
+        "admin",
+        "api",
+        "dashboard",
+        "explore",
+        "groups",
+        "help",
+        "jwt",
+        "oauth",
+        "orgs",
+        " profile",
+        "public",
+        "search",
+        "snippets",
+        "topics",
+        "users",
+    }
+)
+
+GITLAB_CITATION_SUBPATHS = frozenset(
+    {
+        "issues",
+        "merge_requests",
+        "wikis",
+        "snippets",
+        "commit",
+        "commits",
+        "compare",
+        "milestones",
+        "pipelines",
+        "jobs",
+    }
+)
+
+# Public / official Forgejo & Gitea instances linked in FMHY
+FORGEJO_GITEA_HOSTS = frozenset(
+    {
+        "codeberg.org",
+        "gitea.com",
+        "gitea.angry.im",
+        "forgejo.sny.sh",
+        "codefloe.com",
+        "git.disroot.org",
+        "notabug.org",
+        "projects.blender.org",
+        "git.sdf.org",
+        "source.mapcomplete.org",
+        "git.hostux.net",
+        "git.private.coffee",
+        "git.lolcat.ca",
+    }
+)
+
+FORGEJO_NON_REPO_FIRST_SEGMENTS = frozenset(
+    {
+        "admin",
+        "api",
+        "assets",
+        "explore",
+        "issues",
+        "login",
+        "milestones",
+        "notifications",
+        "org",
+        "orgs",
+        "pulls",
+        "repo",
+        "swagger",
+        "user",
+        "users",
+    }
+)
+
+FORGEJO_CITATION_SUBPATHS = frozenset(
+    {
+        "issues",
+        "pulls",
+        "wiki",
+        "commit",
+        "commits",
+        "compare",
+        "activity",
+        "stars",
+        "watchers",
+        "forks",
+    }
+)
+
+SOURCEFORGE_NON_PROJECT_SUBDOMAINS = frozenset(
+    {
+        "www",
+        "sourceforge",
+        "sf",
+        "lists",
+        "downloads",
+        "prdownloads",
+        "master",
+        "vorboss",
+        "jaist",
+        "ncu",
+        "netcologne",
+        "ufpr",
     }
 )
 
@@ -496,6 +637,272 @@ def extract_github_repo(url: str) -> tuple[str, str] | None:
         return None
 
     return owner, repo
+
+
+def extract_alt_forge_repo(url: str) -> GitHubRef | None:
+    """Extract explicit repository `GitHubRef` for GitLab, Codeberg/Forgejo/Gitea, sr.ht, Bitbucket, Pagure, or SourceForge."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+
+    host = _normalize_host(parts.hostname)
+    if not host:
+        return None
+
+    raw_segments = [seg for seg in parts.path.split("/") if seg]
+    if not raw_segments:
+        return None
+
+    # 1. GitLab (gitlab.com + known self-hosted FOSS GitLab instances)
+    if host in GITLAB_HOSTS:
+        first_low = raw_segments[0].lower()
+        if first_low in GITLAB_NON_REPO_FIRST_SEGMENTS:
+            return None
+
+        if "/-/" in parts.path:
+            before_dash, after_dash = parts.path.split("/-/", 1)
+            after_segs = [s for s in after_dash.split("/") if s]
+            if after_segs and after_segs[0].lower() in GITLAB_CITATION_SUBPATHS:
+                return None
+            proj_segs = [s for s in before_dash.split("/") if s]
+        else:
+            # Handle legacy GitLab URLs without `/-/` (e.g. `/owner/repo/wikis/...` or `/owner/repo/tree/main`)
+            cut_idx = len(raw_segments)
+            for idx in range(2, len(raw_segments)):
+                low_s = raw_segments[idx].lower()
+                if low_s in GITLAB_CITATION_SUBPATHS:
+                    return None
+                if low_s in {"tree", "blob", "raw", "releases", "tags", "packages"}:
+                    cut_idx = idx
+                    break
+            proj_segs = raw_segments[:cut_idx]
+
+        if len(proj_segs) < 2:
+            return None
+        repo = proj_segs[-1][:-4] if proj_segs[-1].endswith(".git") else proj_segs[-1]
+        owner = "/".join(proj_segs[:-1])
+        if not repo or not all(GITHUB_SLUG_PART_RE.match(s) for s in [*proj_segs[:-1], repo]):
+            return None
+        return GitHubRef(
+            owner=owner,
+            repo=repo,
+            source="explicit_markdown",
+            forge="gitlab",
+            forge_host=host,
+        )
+
+    # 2. Codeberg / Forgejo / Gitea
+    if host in FORGEJO_GITEA_HOSTS:
+        if len(raw_segments) < 2:
+            return None
+        if raw_segments[0].lower() in FORGEJO_NON_REPO_FIRST_SEGMENTS:
+            return None
+        if len(raw_segments) >= 3 and raw_segments[2].lower() in FORGEJO_CITATION_SUBPATHS:
+            return None
+        owner = raw_segments[0]
+        repo = raw_segments[1][:-4] if raw_segments[1].endswith(".git") else raw_segments[1]
+        if not owner or not repo or not GITHUB_SLUG_PART_RE.match(owner) or not GITHUB_SLUG_PART_RE.match(repo):
+            return None
+        return GitHubRef(
+            owner=owner,
+            repo=repo,
+            source="explicit_markdown",
+            forge="forgejo",
+            forge_host=host,
+        )
+
+    # 3. SourceHut (`git.sr.ht/~owner/repo`, `hg.sr.ht/~owner/repo`, `sr.ht/~owner/repo`)
+    if host in {"git.sr.ht", "hg.sr.ht", "sr.ht"}:
+        if len(raw_segments) < 2 or not raw_segments[0].startswith("~"):
+            return None
+        owner = raw_segments[0]
+        repo = raw_segments[1][:-4] if raw_segments[1].endswith(".git") else raw_segments[1]
+        if len(owner) < 2 or not repo or not GITHUB_SLUG_PART_RE.match(owner[1:]) or not GITHUB_SLUG_PART_RE.match(repo):
+            return None
+        return GitHubRef(
+            owner=owner,
+            repo=repo,
+            source="explicit_markdown",
+            forge="srht",
+            forge_host=host,
+        )
+
+    # 4. Bitbucket Cloud (`bitbucket.org/owner/repo`)
+    if host == "bitbucket.org":
+        if len(raw_segments) < 2:
+            return None
+        if raw_segments[0].lower() in {"account", "dashboard", "product", "repo", "site", "snippets", "workspaces"}:
+            return None
+        if len(raw_segments) >= 3 and raw_segments[2].lower() in {"issues", "pull-requests", "wiki", "commits"}:
+            return None
+        owner = raw_segments[0]
+        repo = raw_segments[1][:-4] if raw_segments[1].endswith(".git") else raw_segments[1]
+        if not GITHUB_SLUG_PART_RE.match(owner) or not GITHUB_SLUG_PART_RE.match(repo):
+            return None
+        return GitHubRef(
+            owner=owner,
+            repo=repo,
+            source="explicit_markdown",
+            forge="bitbucket",
+            forge_host="bitbucket.org",
+        )
+
+    # 5. Pagure (`pagure.io/ns/repo` or `pagure.io/repo`)
+    if host == "pagure.io":
+        if raw_segments[0].lower() in {
+            "about",
+            "api",
+            "browse",
+            "dashboard",
+            "fork",
+            "group",
+            "groups",
+            "login",
+            "new",
+            "projects",
+            "search",
+            "settings",
+            "ssh_info",
+            "user",
+            "users",
+        }:
+            return None
+        if len(raw_segments) >= 2 and raw_segments[1].lower() not in {
+            "issue",
+            "issues",
+            "pull-request",
+            "pull-requests",
+            "blob",
+            "tree",
+            "commits",
+            "releases",
+        }:
+            owner, repo = raw_segments[0], raw_segments[1]
+        else:
+            owner, repo = "_", raw_segments[0]
+        repo = repo[:-4] if repo.endswith(".git") else repo
+        if not GITHUB_SLUG_PART_RE.match(repo):
+            return None
+        return GitHubRef(
+            owner=owner,
+            repo=repo,
+            source="explicit_markdown",
+            forge="pagure",
+            forge_host="pagure.io",
+        )
+
+    # 6. SourceForge (`sourceforge.net/projects/<slug>` or `sourceforge.net/p/<slug>`)
+    if host == "sourceforge.net":
+        if len(raw_segments) >= 2 and raw_segments[0].lower() in {"projects", "p"}:
+            slug = raw_segments[1].lower()
+            if slug and GITHUB_SLUG_PART_RE.match(slug):
+                return GitHubRef(
+                    owner="projects",
+                    repo=slug,
+                    source="explicit_markdown",
+                    forge="sourceforge",
+                    forge_host="sourceforge.net",
+                )
+
+    return None
+
+
+def extract_alt_forge_pages_repo(url: str, entry_title: str = "") -> GitHubRef | None:
+    """Derive `GitHubRef(source='forge_pages')` from `*.gitlab.io`, `*.codeberg.page`, `*.bitbucket.io`, or `*.sourceforge.io`."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+
+    host = (parts.hostname or "").lower().rstrip(".")
+    segments = [seg for seg in parts.path.split("/") if seg]
+    norm_title = re.sub(r"[^a-z0-9]+", "", entry_title.lower())
+
+    def _pick_subpath_repo(default_repo: str) -> str:
+        if segments and GITHUB_SLUG_PART_RE.match(segments[0]):
+            seg0_low = segments[0].lower()
+            if not seg0_low.endswith(STATIC_PAGE_EXTENSIONS):
+                if seg0_low not in PAGES_ROUTE_SEGMENTS or (norm_title and norm_title == seg0_low):
+                    return segments[0]
+        return default_repo
+
+    if host.endswith(".gitlab.io"):
+        owner = host[: -len(".gitlab.io")]
+        if owner and "." not in owner and GITHUB_SLUG_PART_RE.match(owner):
+            repo = _pick_subpath_repo(f"{owner}.gitlab.io")
+            return GitHubRef(
+                owner=owner,
+                repo=repo,
+                source="forge_pages",
+                discovered_from_url=url,
+                entry_title=entry_title or None,
+                forge="gitlab",
+                forge_host="gitlab.com",
+            )
+
+    if ".pages.gitlab." in host:
+        owner, gl_suffix = host.split(".pages.", 1)
+        if owner and "." not in owner and gl_suffix in GITLAB_HOSTS:
+            repo = _pick_subpath_repo(owner)
+            return GitHubRef(
+                owner=owner,
+                repo=repo,
+                source="forge_pages",
+                discovered_from_url=url,
+                entry_title=entry_title or None,
+                forge="gitlab",
+                forge_host=gl_suffix,
+            )
+
+    if host.endswith(".codeberg.page"):
+        owner = host[: -len(".codeberg.page")]
+        if owner and "." not in owner and GITHUB_SLUG_PART_RE.match(owner):
+            repo = _pick_subpath_repo("pages")
+            return GitHubRef(
+                owner=owner,
+                repo=repo,
+                source="forge_pages",
+                discovered_from_url=url,
+                entry_title=entry_title or None,
+                forge="forgejo",
+                forge_host="codeberg.org",
+            )
+
+    if host.endswith(".bitbucket.io"):
+        owner = host[: -len(".bitbucket.io")]
+        if owner and "." not in owner and GITHUB_SLUG_PART_RE.match(owner):
+            repo = _pick_subpath_repo(f"{owner}.bitbucket.io")
+            return GitHubRef(
+                owner=owner,
+                repo=repo,
+                source="forge_pages",
+                discovered_from_url=url,
+                entry_title=entry_title or None,
+                forge="bitbucket",
+                forge_host="bitbucket.org",
+            )
+
+    for sf_suffix in (".sourceforge.io", ".sourceforge.net"):
+        if host.endswith(sf_suffix):
+            slug = host[: -len(sf_suffix)]
+            if (
+                slug
+                and "." not in slug
+                and slug not in SOURCEFORGE_NON_PROJECT_SUBDOMAINS
+                and GITHUB_SLUG_PART_RE.match(slug)
+            ):
+                return GitHubRef(
+                    owner="projects",
+                    repo=slug,
+                    source="forge_pages",
+                    discovered_from_url=url,
+                    entry_title=entry_title or None,
+                    forge="sourceforge",
+                    forge_host="sourceforge.net",
+                )
+
+    return None
 
 
 def extract_github_pages_repo(url: str, entry_title: str = "") -> tuple[str, str] | None:
@@ -837,6 +1244,11 @@ def parse_markdown_content(
                 _add_gh_ref(group, GitHubRef(owner=gh_repo[0], repo=gh_repo[1], source="explicit_markdown"))
                 return True
 
+            alt_repo = extract_alt_forge_repo(url)
+            if alt_repo is not None:
+                _add_gh_ref(group, alt_repo)
+                return True
+
             host = (urlsplit(url).hostname or "").lower()
             if host in {"github.com", "www.github.com", "gist.github.com"}:
                 return False
@@ -859,6 +1271,11 @@ def parse_markdown_content(
                         entry_title=title_hint or None,
                     ),
                 )
+                return True
+
+            alt_pages = extract_alt_forge_pages_repo(url, entry_title=title_hint)
+            if alt_pages is not None:
+                _add_gh_ref(group, alt_pages)
                 return True
 
             gh_cdn = extract_github_cdn_repo(url)

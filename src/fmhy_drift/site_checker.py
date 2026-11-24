@@ -12,8 +12,9 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from fmhy_drift.dns_checker import enrich_unhealthy_sites_last_active
 from fmhy_drift.models import GitHubRef, SiteCheckResult, SiteStatus, WikiEntry
-from fmhy_drift.parser import extract_github_repo
+from fmhy_drift.parser import extract_alt_forge_repo, extract_github_repo
 from fmhy_drift.proxy_guard import validate_proxy_url
 
 MAX_HTML_SNIPPET_BYTES = 65_536
@@ -121,7 +122,8 @@ def discover_github_repos_in_html(
     raw_urls: list[str] = []
     for raw_href in HREF_RE.findall(html_snippet):
         unescaped = html.unescape(raw_href.strip())
-        if "github.com" in unescaped.lower():
+        low_href = unescaped.lower()
+        if any(k in low_href for k in ("github.com", "gitlab.", "codeberg.org", "sr.ht", "bitbucket.org")):
             raw_urls.append(urljoin(page_url, unescaped))
     # Also catch GitHub URLs embedded in SPA hydration JSON / script props (Next.js, Astro, SvelteKit)
     for inline_url in INLINE_GITHUB_URL_RE.findall(html_snippet):
@@ -129,16 +131,27 @@ def discover_github_repos_in_html(
 
     for order_idx, resolved in enumerate(raw_urls):
         extracted = extract_github_repo(resolved)
-        if extracted is None:
-            continue
-
-        owner, repo = extracted
-        ref = GitHubRef(
-            owner=owner,
-            repo=repo,
-            source="discovered_on_site",
-            discovered_from_url=page_url,
-        )
+        if extracted is not None:
+            owner, repo = extracted
+            ref = GitHubRef(
+                owner=owner,
+                repo=repo,
+                source="discovered_on_site",
+                discovered_from_url=page_url,
+            )
+        else:
+            alt_ref = extract_alt_forge_repo(resolved)
+            if alt_ref is None:
+                continue
+            ref = GitHubRef(
+                owner=alt_ref.owner,
+                repo=alt_ref.repo,
+                source="discovered_on_site",
+                discovered_from_url=page_url,
+                forge=alt_ref.forge,
+                forge_host=alt_ref.forge_host,
+            )
+            owner, repo = ref.owner, ref.repo
         if ref.key in seen_keys or ref.key in BOILERPLATE_GITHUB_REPOS:
             continue
         seen_keys.add(ref.key)
@@ -256,6 +269,7 @@ class SiteChecker:
         timeout: float = 20.0,
         retries: int = 1,
         discover_github: bool = True,
+        enrich_last_active: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         # Defense-in-depth: refuse construction without a valid proxy URL
@@ -265,6 +279,7 @@ class SiteChecker:
         self.timeout = timeout
         self.retries = max(0, retries)
         self.discover_github = discover_github
+        self.enrich_last_active = enrich_last_active
         self._transport = transport
 
     async def check_urls(self, urls: list[str]) -> dict[str, SiteCheckResult]:
@@ -300,6 +315,12 @@ class SiteChecker:
                     results[target_url] = await self._check_single_with_retry(client, target_url)
 
             await asyncio.gather(*(_worker(u) for u in unique_urls))
+
+        if self.enrich_last_active and any(r.is_unhealthy for r in results.values()):
+            results = await enrich_unhealthy_sites_last_active(
+                results,
+                transport=self._transport,
+            )
 
         return results
 

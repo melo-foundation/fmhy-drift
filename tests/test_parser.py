@@ -162,9 +162,12 @@ def test_prowlarr_bobarr_openconnect_and_ffmpeg_real_fmhy_lines() -> None:
     assert "bind" not in by_title
     assert "malware" not in by_title
 
-    # OpenConnect main link stays GitLab; `/ [GUI](openconnect-gui)` becomes `OpenConnect (GUI)`!
-    assert by_title["OpenConnect"].github_refs == []
-    assert by_title["OpenConnect"].site_urls == ["https://gitlab.com/openconnect/openconnect"]
+    # OpenConnect main link extracts GitLab repo; `/ [GUI](openconnect-gui)` becomes `OpenConnect (GUI)`!
+    assert [r.full_name for r in by_title["OpenConnect"].github_refs] == [
+        "gitlab.com/openconnect/openconnect"
+    ]
+    assert by_title["OpenConnect"].github_refs[0].forge == "gitlab"
+    assert by_title["OpenConnect"].site_urls == []
     assert [r.full_name for r in by_title["OpenConnect (GUI)"].github_refs] == [
         "openconnect/openconnect-gui"
     ]

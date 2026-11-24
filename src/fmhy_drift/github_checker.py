@@ -12,6 +12,7 @@ import json
 import re
 from dataclasses import replace
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -37,6 +38,7 @@ SOURCE_PRIORITY: dict[str, int] = {
     "github_cdn": 4,
     "discovered_on_site": 3,
     "github_pages": 2,
+    "forge_pages": 2,
     "domain_heuristic": 1,
 }
 
@@ -543,6 +545,11 @@ class GitHubActivityChecker:
                 await self._populate_repo_results(client, unique_refs, results)
                 if self.check_archived_replacements:
                     await self._enrich_archived_replacements(client, results)
+                    await self._enrich_author_similar_repos(
+                        client,
+                        results,
+                        exclude_keys=domain_heuristic_keys,
+                    )
                 try:
                     await asyncio.wait_for(
                         self._enrich_missing_last_seen_wayback(
@@ -1338,3 +1345,343 @@ class GitHubActivityChecker:
                 )
             except TimeoutError:
                 pass
+
+    async def enrich_dead_and_archived_author_repos(
+        self,
+        results: dict[str, RepoActivityResult],
+        *,
+        exclude_keys: set[str] | None = None,
+    ) -> dict[str, RepoActivityResult]:
+        """Standalone helper to enrich dead (`404`) and archived GitHub repos with same/similar repos the author works in."""
+        updated = dict(results)
+        client_kwargs: dict = {
+            "timeout": httpx.Timeout(self.timeout),
+            "follow_redirects": True,
+            "trust_env": False,
+            "headers": self._headers(),
+        }
+        if self._transport is not None:
+            client_kwargs["transport"] = self._transport
+        elif self.proxy_url:
+            client_kwargs["proxy"] = self.proxy_url
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            await self._enrich_author_similar_repos(
+                client,
+                updated,
+                exclude_keys=exclude_keys,
+            )
+        return updated
+
+    async def _enrich_author_similar_repos(
+        self,
+        client: httpx.AsyncClient,
+        results: dict[str, RepoActivityResult],
+        *,
+        exclude_keys: set[str] | None = None,
+    ) -> None:
+        """For dead (`404`) or archived (no replacement) GitHub repos, check the owner's owned & contributed-to repos for same/similar names."""
+        excluded = exclude_keys or set()
+        candidate_keys = [
+            k
+            for k, rr in results.items()
+            if rr.forge == "github"
+            and k not in excluded
+            and not rr.replacement_url
+            and rr.tier in {StalenessTier.MISSING, StalenessTier.ARCHIVED}
+            and "domain-heuristic" not in rr.reason
+        ]
+        if not candidate_keys:
+            return
+
+        owner_to_keys: dict[str, list[str]] = {}
+        owner_display: dict[str, str] = {}
+        for k in candidate_keys:
+            rr = results[k]
+            eff_owner = (
+                rr.canonical_full_name.split("/", 1)[0]
+                if (rr.canonical_full_name and "/" in rr.canonical_full_name)
+                else rr.owner
+            )
+            low_o = eff_owner.lower()
+            owner_to_keys.setdefault(low_o, []).append(k)
+            owner_display.setdefault(low_o, eff_owner)
+
+        owner_candidates: dict[str, list[dict]] = {lo: [] for lo in owner_to_keys}
+        unique_low_owners = list(owner_to_keys.keys())
+
+        if self.github_token:
+            for start in range(0, len(unique_low_owners), 15):
+                batch = unique_low_owners[start : start + 15]
+                q_parts: list[str] = []
+                for idx, lo in enumerate(batch):
+                    login_json = json.dumps(owner_display[lo], ensure_ascii=False)
+                    q_parts.append(
+                        f"""
+  o{idx}: repositoryOwner(login: {login_json}) {{
+    repositories(first: 60, ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER], isArchived: false, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{
+      nodes {{ nameWithOwner name isArchived isDisabled isEmpty pushedAt }}
+    }}
+    ... on User {{
+      repositoriesContributedTo(first: 50, includeUserRepositories: true, contributionTypes: [COMMIT, PULL_REQUEST, REPOSITORY], orderBy: {{field: PUSHED_AT, direction: DESC}}) {{
+        nodes {{ nameWithOwner name isArchived isDisabled isEmpty pushedAt }}
+      }}
+    }}
+  }}"""
+                    )
+                query = "query {" + "".join(q_parts) + "\n}"
+                try:
+                    resp = await client.post(GITHUB_GRAPHQL_URL, json={"query": query})
+                    if resp.status_code != 200:
+                        continue
+                    data = (resp.json() or {}).get("data") or {}
+                except Exception:
+                    continue
+
+                for idx, lo in enumerate(batch):
+                    node = data.get(f"o{idx}")
+                    if not isinstance(node, dict):
+                        continue
+                    seen_nwo: set[str] = set()
+                    merged_nodes: list[dict] = []
+                    for field_name in ("repositories", "repositoriesContributedTo"):
+                        conn = node.get(field_name)
+                        nodes = conn.get("nodes") if isinstance(conn, dict) else None
+                        if not isinstance(nodes, list):
+                            continue
+                        for item in nodes:
+                            if not isinstance(item, dict):
+                                continue
+                            nwo = str(item.get("nameWithOwner") or "")
+                            if not nwo or nwo.lower() in seen_nwo:
+                                continue
+                            seen_nwo.add(nwo.lower())
+                            merged_nodes.append(item)
+                    owner_candidates[lo] = merged_nodes
+        else:
+            sem = asyncio.Semaphore(min(8, self.concurrency))
+
+            async def _fetch_rest_owner(lo: str) -> None:
+                disp = owner_display[lo]
+                seen_nwo: set[str] = set()
+                merged: list[dict] = []
+                async with sem:
+                    try:
+                        r1 = await client.get(
+                            f"{GITHUB_REST_BASE}/users/{disp}/repos",
+                            params={"per_page": "100", "type": "all", "sort": "pushed"},
+                        )
+                        if r1.status_code == 200 and isinstance(r1.json(), list):
+                            for item in r1.json():
+                                if not isinstance(item, dict):
+                                    continue
+                                nwo = str(item.get("full_name") or "")
+                                if not nwo or nwo.lower() in seen_nwo:
+                                    continue
+                                seen_nwo.add(nwo.lower())
+                                merged.append(
+                                    {
+                                        "nameWithOwner": nwo,
+                                        "name": item.get("name") or nwo.split("/")[-1],
+                                        "isArchived": bool(item.get("archived")),
+                                        "isDisabled": bool(item.get("disabled")),
+                                        "isEmpty": bool(
+                                            item.get("size") == 0 and not item.get("pushed_at")
+                                        ),
+                                        "pushedAt": item.get("pushed_at"),
+                                    }
+                                )
+                        # Also inspect public contribution events (`PushEvent` / `PullRequestEvent`) for external org repos
+                        target_names = [results[k].repo for k in owner_to_keys[lo]]
+                        ev_resp = await client.get(
+                            f"{GITHUB_REST_BASE}/users/{disp}/events/public",
+                            params={"per_page": "40"},
+                        )
+                        if ev_resp.status_code == 200 and isinstance(ev_resp.json(), list):
+                            ext_slugs: list[str] = []
+                            for ev in ev_resp.json():
+                                if not isinstance(ev, dict):
+                                    continue
+                                if ev.get("type") not in {
+                                    "PushEvent",
+                                    "PullRequestEvent",
+                                    "CreateEvent",
+                                }:
+                                    continue
+                                r_obj = ev.get("repo")
+                                slug = str(r_obj.get("name") or "") if isinstance(r_obj, dict) else ""
+                                if "/" not in slug or slug.lower() in seen_nwo:
+                                    continue
+                                cand_rname = slug.split("/", 1)[1]
+                                if any(
+                                    _score_similar_repo_name(tname, cand_rname, same_owner=False) > 0
+                                    for tname in target_names
+                                ):
+                                    seen_nwo.add(slug.lower())
+                                    ext_slugs.append(slug)
+                            for slug in ext_slugs[:5]:
+                                rr_ext = await client.get(f"{GITHUB_REST_BASE}/repos/{slug}")
+                                if rr_ext.status_code == 200 and isinstance(rr_ext.json(), dict):
+                                    d = rr_ext.json()
+                                    merged.append(
+                                        {
+                                            "nameWithOwner": d.get("full_name") or slug,
+                                            "name": d.get("name") or slug.split("/")[-1],
+                                            "isArchived": bool(d.get("archived")),
+                                            "isDisabled": bool(d.get("disabled")),
+                                            "isEmpty": bool(
+                                                d.get("size") == 0 and not d.get("pushed_at")
+                                            ),
+                                            "pushedAt": d.get("pushed_at"),
+                                        }
+                                    )
+                    except Exception:
+                        pass
+                owner_candidates[lo] = merged
+
+            await asyncio.gather(*(_fetch_rest_owner(lo) for lo in unique_low_owners))
+
+        for lo, keys in owner_to_keys.items():
+            cands = owner_candidates.get(lo) or []
+            if not cands:
+                continue
+            for k in keys:
+                rr = results[k]
+                best = _pick_best_similar_author_repo(
+                    rr=rr,
+                    eff_owner=owner_display[lo],
+                    candidates=cands,
+                    thresholds=self.thresholds,
+                    now=self.now,
+                )
+                if best is not None:
+                    repl_url, repl_status = best
+                    results[k] = replace(
+                        rr,
+                        replacement_url=repl_url,
+                        replacement_status=repl_status,
+                    )
+
+
+SIMILAR_AFFIX_RE = re.compile(
+    r"(?:^[-_.]*(?:new|open|libre|modern|go|py|rs)[-_.]+"
+    r"|[-_.]*(?:v?\d+|ng|next|new|reborn|redux|revamped|rewrite|reloaded|plus|pro|lite|ce|"
+    r"rs|go|py|js|ts|kt|cli|gui|app|web|desktop|mobile|android|ios|official|community)$)",
+    re.IGNORECASE,
+)
+
+
+def _alnum_slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def _core_repo_stem(name: str) -> str:
+    cur = name.strip().lower()
+    for _ in range(2):
+        stripped = SIMILAR_AFFIX_RE.sub("", cur)
+        alnum = _alnum_slug(stripped)
+        if len(alnum) >= 4:
+            cur = stripped
+        else:
+            break
+    return _alnum_slug(cur)
+
+
+def _score_similar_repo_name(target_repo: str, cand_repo: str, *, same_owner: bool) -> int:
+    t_alnum = _alnum_slug(target_repo)
+    c_alnum = _alnum_slug(cand_repo)
+    if not t_alnum or not c_alnum:
+        return 0
+    if t_alnum == c_alnum and len(t_alnum) >= 3:
+        return 100
+
+    t_stem = _core_repo_stem(target_repo)
+    c_stem = _core_repo_stem(cand_repo)
+    if len(t_stem) >= 4 and t_stem == c_stem:
+        return 92
+
+    min_prefix_len = 4 if same_owner else 5
+    if len(t_stem) >= min_prefix_len and len(c_stem) >= min_prefix_len:
+        shorter, longer = (
+            (t_stem, c_stem) if len(t_stem) <= len(c_stem) else (c_stem, t_stem)
+        )
+        if (longer.startswith(shorter) or longer.endswith(shorter)) and (
+            len(shorter) / len(longer) >= 0.60
+        ):
+            return 84
+
+    if len(t_stem) >= 6 and len(c_stem) >= 6:
+        ratio = SequenceMatcher(None, t_stem, c_stem).ratio()
+        if ratio >= 0.84:
+            return 78
+
+    return 0
+
+
+def _pick_best_similar_author_repo(
+    *,
+    rr: RepoActivityResult,
+    eff_owner: str,
+    candidates: list[dict],
+    thresholds: TierThresholds,
+    now: datetime,
+) -> tuple[str, str] | None:
+    self_full_names = {
+        rr.full_name.lower(),
+        f"{rr.owner.lower()}/{rr.repo.lower()}",
+        f"{eff_owner.lower()}/{rr.repo.lower()}",
+    }
+    eff_repo = (
+        rr.canonical_full_name.split("/", 1)[1]
+        if (rr.canonical_full_name and "/" in rr.canonical_full_name)
+        else rr.repo
+    )
+
+    scored: list[tuple[int, datetime, str, bool, int | None]] = []
+    for cand in candidates:
+        nwo = str(cand.get("nameWithOwner") or "").strip()
+        if "/" not in nwo or nwo.lower() in self_full_names:
+            continue
+        if cand.get("isArchived") or cand.get("isDisabled") or cand.get("isEmpty"):
+            continue
+
+        c_owner, c_name = nwo.split("/", 1)
+        same_owner = c_owner.lower() == eff_owner.lower()
+        score = max(
+            _score_similar_repo_name(eff_repo, c_name, same_owner=same_owner),
+            _score_similar_repo_name(rr.repo, c_name, same_owner=same_owner),
+        )
+        if score <= 0:
+            continue
+
+        pushed_dt = _parse_iso_datetime(cand.get("pushedAt"))
+        if pushed_dt is None:
+            continue
+        # Never suggest an older abandoned repo that predates the dead/archived repo's own last push
+        if rr.last_activity_at is not None and pushed_dt <= rr.last_activity_at:
+            continue
+        cand_days = max(0, int((now - pushed_dt).total_seconds() // 86400))
+        if cand_days >= thresholds.tier3_days:
+            continue
+
+        scored.append((score, pushed_dt, nwo, same_owner, cand_days))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    _, _, best_nwo, is_same_owner, best_days = scored[0]
+    act_word = (
+        "active"
+        if (best_days is not None and best_days < thresholds.tier1_days)
+        else f"last push {best_days}d ago"
+    )
+    if best_days is not None and best_days < thresholds.tier1_days:
+        act_word = f"active, last push {best_days}d ago"
+
+    prefix = (
+        "author's similar repo"
+        if is_same_owner
+        else f"similar repo @{eff_owner} works in"
+    )
+    return f"https://github.com/{best_nwo}", f"{prefix} — {act_word}"

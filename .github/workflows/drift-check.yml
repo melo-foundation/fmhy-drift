@@ -47,6 +47,11 @@ on:
         required: false
         default: "0"
         type: string
+      only_alt_forges:
+        description: "Reuse existing GitHub & DNS results from Pages and only scan non-GitHub forges"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -115,6 +120,27 @@ jobs:
           EXTRA_ARGS=()
           if [ "${{ inputs.starred_only }}" = "true" ]; then
             EXTRA_ARGS+=(--starred-only)
+          fi
+          COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null || echo "")
+          if [ "${{ inputs.only_alt_forges }}" = "true" ] || { [ "${{ github.event_name }}" = "push" ] && ! echo "${COMMIT_MSG}" | grep -qi '\[full-scan\]'; }; then
+            if curl -fsSL "https://melo-foundation.github.io/fmhy-drift/fmhy-drift-report.json" -o /tmp/prev-report.json; then
+              IS_FRESH=$(python3 -c '
+          import json
+          from datetime import UTC, datetime
+          try:
+              d = json.load(open("/tmp/prev-report.json"))
+              ts = datetime.fromisoformat(d["generated_at"].replace("Z", "+00:00")).astimezone(UTC)
+              age = (datetime.now(UTC) - ts).total_seconds()
+              repos = int((d.get("summary") or {}).get("unique_repos_checked") or 0)
+              print("yes" if (age < 21600 and repos >= 1000) else "no")
+          except Exception:
+              print("no")
+          ')
+              if [ "${{ inputs.only_alt_forges }}" = "true" ] || [ "${IS_FRESH}" = "yes" ]; then
+                echo "Reusing fresh GitHub + DNS report (<6h old) and scanning non-GitHub forges + new enrichments..."
+                EXTRA_ARGS+=(--reuse-report /tmp/prev-report.json --only-alt-forges)
+              fi
+            fi
           fi
           uv run fmhy-drift \
             --skip-without-proxy \

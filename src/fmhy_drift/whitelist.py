@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from fmhy_drift.parser import clean_url, extract_github_repo
+from fmhy_drift.parser import clean_url, extract_alt_forge_repo, extract_github_repo
 
 
 def normalize_url_entry(raw: str) -> str | None:
@@ -49,8 +49,15 @@ class Whitelist:
     urls: set[str] = field(default_factory=set)
     notes: dict[str, str] = field(default_factory=dict)
 
-    def is_repo_whitelisted(self, owner: str, repo: str) -> bool:
-        return f"{owner.lower()}/{repo.lower()}" in self.repos
+    def is_repo_whitelisted(self, owner: str, repo: str, forge_host: str = "github.com") -> bool:
+        if forge_host.lower() in {"github.com", "www.github.com", ""}:
+            return f"{owner.lower()}/{repo.lower()}" in self.repos
+        if forge_host.lower() == "sourceforge.net":
+            return f"sourceforge.net/projects/{repo.lower()}" in self.repos
+        return f"{forge_host.lower()}/{owner.lower()}/{repo.lower()}" in self.repos
+
+    def is_repo_key_whitelisted(self, key: str) -> bool:
+        return key.strip().lower() in self.repos
 
     def is_url_whitelisted(self, url: str) -> bool:
         norm = normalize_url_entry(url)
@@ -61,8 +68,18 @@ def normalize_repo_entry(raw: str) -> str | None:
     text = raw.strip()
     if not text:
         return None
-    if "github.com" in text.lower():
-        extracted = extract_github_repo(text)
+    if text.lower().startswith(("http://", "https://")):
+        if "github.com" in text.lower():
+            extracted = extract_github_repo(text)
+            if extracted:
+                return f"{extracted[0].lower()}/{extracted[1].lower()}"
+            return None
+        alt = extract_alt_forge_repo(text)
+        if alt is not None:
+            return alt.key
+        return None
+    if "github.com/" in text.lower():
+        extracted = extract_github_repo("https://" + text.lstrip("/"))
         if extracted:
             return f"{extracted[0].lower()}/{extracted[1].lower()}"
         return None
@@ -70,6 +87,9 @@ def normalize_repo_entry(raw: str) -> str | None:
     if len(parts) == 2:
         repo = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
         return f"{parts[0].lower()}/{repo.lower()}"
+    if len(parts) >= 3 and "." in parts[0]:
+        parts[-1] = parts[-1][:-4] if parts[-1].endswith(".git") else parts[-1]
+        return "/".join(p.lower() for p in parts)
     return None
 
 
