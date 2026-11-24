@@ -180,6 +180,7 @@ def _evaluate_repo_state(
     canonical_full_name: str | None,
     is_archived: bool,
     is_disabled: bool,
+    archived_at: datetime | None = None,
     last_activity_at: datetime | None,
     latest_release_tag: str | None,
     homepage_url: str | None,
@@ -192,18 +193,23 @@ def _evaluate_repo_state(
         delta = now - last_activity_at
         inactive_days = max(0, int(delta.total_seconds() // 86400))
 
+    archived_days: int | None = None
+    if archived_at is not None:
+        archived_days = max(0, int((now - archived_at).total_seconds() // 86400))
+
     rename_note = ""
     if canonical_full_name and canonical_full_name.lower() != f"{owner}/{repo}".lower():
-        rename_note = f" (redirected -> {canonical_full_name})"
+        rename_note = f" (resolved -> {canonical_full_name})"
 
     if is_disabled:
-        # Disabled repositories cannot be accessed on GitHub -> classify as Dead (MISSING)
         return RepoActivityResult(
             owner=owner,
             repo=repo,
             tier=StalenessTier.MISSING,
             last_activity_at=last_activity_at,
             inactive_days=inactive_days,
+            archived_at=archived_at,
+            archived_days=archived_days,
             is_archived=is_archived,
             is_disabled=True,
             latest_release_tag=latest_release_tag,
@@ -214,20 +220,29 @@ def _evaluate_repo_state(
         )
 
     if is_archived:
-        age_txt = f" ({inactive_days}d since last push)" if inactive_days is not None else ""
+        parts_txt: list[str] = []
+        if archived_at is not None and archived_days is not None:
+            parts_txt.append(f"archived on {archived_at.strftime('%Y-%m-%d')} ({archived_days}d ago)")
+        else:
+            parts_txt.append("archived")
+        if inactive_days is not None:
+            parts_txt.append(f"last push {inactive_days}d ago")
+        summary_txt = ", ".join(parts_txt)
         return RepoActivityResult(
             owner=owner,
             repo=repo,
             tier=StalenessTier.ARCHIVED,
             last_activity_at=last_activity_at,
             inactive_days=inactive_days,
+            archived_at=archived_at,
+            archived_days=archived_days,
             is_archived=True,
             is_disabled=False,
             latest_release_tag=latest_release_tag,
             canonical_full_name=canonical_full_name,
             homepage_url=homepage_url,
             description=description,
-            reason=f"Repository is archived{age_txt}{rename_note}",
+            reason=f"Repository {summary_txt}{rename_note}",
         )
 
     if inactive_days is None:
@@ -274,6 +289,7 @@ def _build_graphql_batch_query(batch: list[GitHubRef]) -> str:
     description
     homepageUrl
     isArchived
+    archivedAt
     isDisabled
     pushedAt
     defaultBranchRef {{
@@ -376,6 +392,7 @@ class GitHubActivityChecker:
             await self._populate_repo_results(client, unique_refs, results)
             if self.check_archived_replacements:
                 await self._enrich_archived_replacements(client, results)
+            await self._enrich_missing_last_seen_wayback(client, results)
 
         return results
 
@@ -563,6 +580,10 @@ class GitHubActivityChecker:
         for idx, ref in enumerate(batch):
             node = data.get(f"r{idx}")
             if not isinstance(node, dict):
+                # Speculative custom-domain guesses (`abztract.arhamkhnz.com` -> `arhamkhnz/abztract`)
+                # that don't exist in GraphQL are simply absent, not broken explicit links.
+                if ref.source == "domain_heuristic":
+                    continue
                 unresolved.append(ref)
                 continue
 
@@ -590,6 +611,7 @@ class GitHubActivityChecker:
                 canonical_full_name=node.get("nameWithOwner"),
                 is_archived=bool(node.get("isArchived")),
                 is_disabled=bool(node.get("isDisabled")),
+                archived_at=_parse_iso_datetime(node.get("archivedAt")),
                 last_activity_at=latest_ts,
                 latest_release_tag=release_tag,
                 homepage_url=_normalize_homepage(node.get("homepageUrl")),
@@ -618,6 +640,26 @@ class GitHubActivityChecker:
             )
 
         if resp.status_code == 404:
+            # Subdirectory on `<owner>.github.io/<subpath>` often lives inside `<owner>/<owner>.github.io`!
+            root_pages_repo = f"{ref.owner}.github.io"
+            if ref.source == "github_pages" and ref.repo.lower() != root_pages_repo.lower():
+                fallback_ref = GitHubRef(
+                    owner=ref.owner,
+                    repo=root_pages_repo,
+                    source="github_pages",
+                    discovered_from_url=ref.discovered_from_url,
+                )
+                fallback_res = await self._check_rest_single(client, fallback_ref)
+                if fallback_res.tier != StalenessTier.MISSING:
+                    # If GraphQL token is set, grab `archivedAt` if archived via tiny single-repo GraphQL
+                    if fallback_res.is_archived and self.github_token:
+                        gql_map: dict[str, RepoActivityResult] = {}
+                        await self._check_graphql_batch(client, [fallback_ref], gql_map)
+                        if fallback_ref.key in gql_map:
+                            gql_res = gql_map[fallback_ref.key]
+                            return replace(gql_res, owner=ref.owner, repo=ref.repo)
+                    return replace(fallback_res, owner=ref.owner, repo=ref.repo)
+
             return RepoActivityResult(
                 owner=ref.owner,
                 repo=ref.repo,
@@ -666,6 +708,7 @@ class GitHubActivityChecker:
             canonical_full_name=data.get("full_name"),
             is_archived=bool(data.get("archived")),
             is_disabled=bool(data.get("disabled")),
+            archived_at=None,
             last_activity_at=latest_ts,
             latest_release_tag=None,
             homepage_url=_normalize_homepage(data.get("homepage")),
@@ -673,3 +716,63 @@ class GitHubActivityChecker:
             thresholds=self.thresholds,
             now=self.now,
         )
+
+    async def _enrich_missing_last_seen_wayback(
+        self,
+        client: httpx.AsyncClient,
+        results: dict[str, RepoActivityResult],
+    ) -> None:
+        """For 404/451 dead repos, check Wayback Machine CDX for when the repo was last seen alive."""
+        if self._transport is not None:
+            # Skip external archive.org calls under unit-test MockTransports tailored to GitHub API
+            return
+
+        missing_keys = [
+            k
+            for k, r in results.items()
+            if r.tier == StalenessTier.MISSING and r.inactive_days is None
+        ]
+        if not missing_keys:
+            return
+
+        sem = asyncio.Semaphore(6)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(6.0),
+            follow_redirects=True,
+            trust_env=False,
+            headers={"User-Agent": "fmhy-drift-checker/0.1"},
+        ) as wb_client:
+
+            async def _lookup(key: str) -> None:
+                rr = results[key]
+                async with sem:
+                    try:
+                        resp = await wb_client.get(
+                            "https://web.archive.org/cdx/search/cdx",
+                            params={
+                                "url": f"https://github.com/{rr.owner}/{rr.repo}",
+                                "output": "json",
+                                "fl": "timestamp,statuscode",
+                                "filter": "statuscode:200",
+                                "limit": "-1",
+                            },
+                        )
+                        if resp.status_code != 200:
+                            return
+                        rows = resp.json()
+                        if not isinstance(rows, list) or len(rows) < 2:
+                            return
+                        ts_raw = str(rows[-1][0])
+                        if len(ts_raw) >= 8:
+                            dt = datetime.strptime(ts_raw[:8], "%Y%m%d").replace(tzinfo=UTC)
+                            days = max(0, int((self.now - dt).total_seconds() // 86400))
+                            results[key] = replace(
+                                rr,
+                                last_activity_at=dt,
+                                inactive_days=days,
+                                reason=f"{rr.reason} — last archived alive {dt.strftime('%Y-%m-%d')}",
+                            )
+                    except Exception:
+                        return
+
+            await asyncio.gather(*(_lookup(k) for k in missing_keys))

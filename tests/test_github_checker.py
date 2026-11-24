@@ -59,6 +59,7 @@ def test_github_activity_graphql_rest_and_archived_successor_verification() -> N
         GitHubRef("org", "disabled-repo", "explicit_markdown"),
         GitHubRef("old-org", "renamed-repo", "explicit_markdown"),
         GitHubRef("org", "deleted-repo", "explicit_markdown"),
+        GitHubRef("pagesuser", "subpage-game", "github_pages", "https://pagesuser.github.io/subpage-game"),
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -150,8 +151,9 @@ def test_github_activity_graphql_rest_and_archived_successor_verification() -> N
                             "description": "Legacy version",
                             "homepageUrl": "https://org.github.io/archived-repo/",
                             "isArchived": True,
+                            "archivedAt": "2026-10-25T12:00:00Z",
                             "isDisabled": False,
-                            "pushedAt": "2026-11-20T12:00:00Z",
+                            "pushedAt": "2026-10-10T12:00:00Z",
                             "defaultBranchRef": None,
                             "releases": {"nodes": []},
                         },
@@ -160,6 +162,7 @@ def test_github_activity_graphql_rest_and_archived_successor_verification() -> N
                             "description": "",
                             "homepageUrl": "",
                             "isArchived": False,
+                            "archivedAt": None,
                             "isDisabled": True,
                             "pushedAt": "2026-11-20T12:00:00Z",
                             "defaultBranchRef": None,
@@ -167,6 +170,7 @@ def test_github_activity_graphql_rest_and_archived_successor_verification() -> N
                         },
                         "r6": None,
                         "r7": None,
+                        "r8": None,
                     }
                 },
             )
@@ -189,6 +193,23 @@ def test_github_activity_graphql_rest_and_archived_successor_verification() -> N
         if request.url.path == "/repos/org/deleted-repo":
             return httpx.Response(404, json={"message": "Not Found"})
 
+        if request.url.path == "/repos/pagesuser/subpage-game":
+            return httpx.Response(404, json={"message": "Not Found"})
+
+        if request.url.path == "/repos/pagesuser/pagesuser.github.io":
+            return httpx.Response(
+                200,
+                json={
+                    "full_name": "pagesuser/pagesuser.github.io",
+                    "description": "User pages monorepo",
+                    "homepage": "",
+                    "archived": False,
+                    "disabled": False,
+                    "pushed_at": "2020-11-24T12:00:00Z",
+                    "created_at": "2019-01-01T00:00:00Z",
+                },
+            )
+
         return httpx.Response(500)
 
     checker = GitHubActivityChecker(
@@ -207,12 +228,18 @@ def test_github_activity_graphql_rest_and_archived_successor_verification() -> N
     assert results["org/tier2-repo"].tier == StalenessTier.TIER_2_WARNING
     assert results["org/tier3-repo"].tier == StalenessTier.TIER_3_CRITICAL
 
-    # Archived repo has its GitHub Pages homepage AND verified replacement repo populated!
+    # Archived repo has its GitHub Pages homepage, archivedAt, AND verified replacement repo!
     arch = results["org/archived-repo"]
     assert arch.tier == StalenessTier.ARCHIVED
+    assert arch.archived_days == 30
     assert arch.homepage_url == "https://org.github.io/archived-repo/"
     assert arch.replacement_url == "https://github.com/new-org/successor-repo"
     assert arch.replacement_status == "active, last push 4d ago"
+
+    # GitHub Pages subdirectory URL falls back to `pagesuser/pagesuser.github.io` instead of bogus 404!
+    pages_sub = results["pagesuser/subpage-game"]
+    assert pages_sub.tier == StalenessTier.TIER_3_CRITICAL
+    assert pages_sub.full_name == "pagesuser/pagesuser.github.io"
 
     # Disabled repo is classified with Dead (MISSING), NOT Archived!
     assert results["org/disabled-repo"].tier == StalenessTier.MISSING

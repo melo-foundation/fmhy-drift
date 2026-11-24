@@ -35,6 +35,7 @@ GitHubRefSource = Literal[
     "explicit_markdown",
     "github_pages",
     "github_cdn",
+    "domain_heuristic",
     "discovered_on_site",
 ]
 
@@ -134,6 +135,8 @@ class RepoActivityResult:
     tier: StalenessTier
     last_activity_at: datetime | None = None
     inactive_days: int | None = None
+    archived_at: datetime | None = None
+    archived_days: int | None = None
     is_archived: bool = False
     is_disabled: bool = False
     latest_release_tag: str | None = None

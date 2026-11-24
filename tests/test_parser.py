@@ -101,6 +101,24 @@ def test_parse_markdown_content_extracts_entries_and_skips_noise() -> None:
     assert parens_entry.site_urls == ["https://example.org/wiki/Tool_(software)"]
 
 
+def test_abztract_and_blobs_multi_tool_line_and_dotted_pages_repo() -> None:
+    line = "* [Abztract](https://abztract.arhamkhnz.com/) or [Blobs](https://lokesh-coder.github.io/blobs.app/) - SVG Shape Generators\n"
+    entries = parse_markdown_content(line, source_file="img-tools.md")
+    assert len(entries) == 2
+
+    abztract = entries[0]
+    assert abztract.title == "Abztract"
+    assert abztract.site_urls == ["https://abztract.arhamkhnz.com/"]
+    assert [r.full_name for r in abztract.github_refs] == ["arhamkhnz/abztract"]
+    assert abztract.github_refs[0].source == "domain_heuristic"
+
+    blobs = entries[1]
+    assert blobs.title == "Blobs"
+    assert blobs.site_urls == ["https://lokesh-coder.github.io/blobs.app/"]
+    assert [r.full_name for r in blobs.github_refs] == ["lokesh-coder/blobs.app"]
+    assert blobs.github_refs[0].source == "github_pages"
+
+
 def test_load_local_index_directory(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()

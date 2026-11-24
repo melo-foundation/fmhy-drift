@@ -126,6 +126,24 @@ def _entry_location(item: EntryDriftResult) -> str:
     return f"{star}**{item.entry.title}** (`{cat}` — `{item.entry.entry_id}`)"
 
 
+SOURCE_LABELS: dict[str, str] = {
+    "explicit_markdown": "linked on FMHY",
+    "github_pages": "heuristic: github.io",
+    "github_cdn": "heuristic: raw/CDN",
+    "domain_heuristic": "heuristic: subdomain",
+    "discovered_on_site": "scraped from website",
+}
+
+
+def _repo_source_label(item: EntryDriftResult, rr: RepoActivityResult) -> str:
+    key = f"{rr.owner.lower()}/{rr.repo.lower()}"
+    raw_src = next(
+        (ref.source for ref in item.all_github_refs if ref.key == key),
+        "explicit_markdown",
+    )
+    return SOURCE_LABELS.get(raw_src, raw_src)
+
+
 def _format_web_links_inline(item: EntryDriftResult, rr: RepoActivityResult) -> str:
     links = item.web_links_for_repo(rr)
     if not links:
@@ -225,6 +243,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
         for item, matched_repos in dead_repos:
             lines.append(f"- {_entry_location(item)}")
             for rr in matched_repos:
+                src_lbl = _repo_source_label(item, rr)
                 web_str = _format_web_links_inline(item, rr)
                 age_note = ""
                 if rr.inactive_days is not None:
@@ -235,7 +254,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                     )
                     age_note = f" — **{format_duration_human(rr.inactive_days)}** without updates{last_str}"
                 lines.append(
-                    f"  - 💀 [{rr.full_name}]({rr.html_url}) — {rr.reason}{age_note}{web_str}"
+                    f"  - 💀 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {rr.reason}{age_note}{web_str}"
                 )
 
     # Section 2: Archived GitHub Repositories (longest unupdated at the top)
@@ -260,16 +279,22 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
             for item, matched_repos in with_repl:
                 lines.append(f"- {_entry_location(item)}")
                 for rr in matched_repos:
+                    src_lbl = _repo_source_label(item, rr)
                     web_str = _format_web_links_inline(item, rr)
                     repl_str = _format_replacement_inline(rr)
+                    arch_str = (
+                        f"archived **{format_duration_human(rr.archived_days)}** ago (`{rr.archived_at.strftime('%Y-%m-%d')}`), "
+                        if rr.archived_at and rr.archived_days is not None
+                        else "archived, "
+                    )
                     last_str = (
                         rr.last_activity_at.strftime("%Y-%m-%d")
                         if rr.last_activity_at
                         else "unknown"
                     )
                     lines.append(
-                        f"  - 📦 [{rr.full_name}]({rr.html_url}) — archived, "
-                        f"**{format_duration_human(rr.inactive_days)}** since last push (`{last_str}`)"
+                        f"  - 📦 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {arch_str}"
+                        f"last push **{format_duration_human(rr.inactive_days)}** ago (`{last_str}`)"
                         f"{web_str}{repl_str}"
                     )
             lines.append("")
@@ -279,15 +304,21 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
             for item, matched_repos in without_repl:
                 lines.append(f"- {_entry_location(item)}")
                 for rr in matched_repos:
+                    src_lbl = _repo_source_label(item, rr)
                     web_str = _format_web_links_inline(item, rr)
+                    arch_str = (
+                        f"archived **{format_duration_human(rr.archived_days)}** ago (`{rr.archived_at.strftime('%Y-%m-%d')}`), "
+                        if rr.archived_at and rr.archived_days is not None
+                        else "archived, "
+                    )
                     last_str = (
                         rr.last_activity_at.strftime("%Y-%m-%d")
                         if rr.last_activity_at
                         else "unknown"
                     )
                     lines.append(
-                        f"  - 📦 [{rr.full_name}]({rr.html_url}) — archived, "
-                        f"**{format_duration_human(rr.inactive_days)}** since last push (`{last_str}`)"
+                        f"  - 📦 [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — {arch_str}"
+                        f"last push **{format_duration_human(rr.inactive_days)}** ago (`{last_str}`)"
                         f"{web_str}"
                     )
 
@@ -316,6 +347,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
         for item, matched_repos in bucket:
             lines.append(f"- {_entry_location(item)}")
             for rr in matched_repos:
+                src_lbl = _repo_source_label(item, rr)
                 last_str = (
                     rr.last_activity_at.strftime("%Y-%m-%d")
                     if rr.last_activity_at
@@ -323,7 +355,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                 )
                 web_str = _format_web_links_inline(item, rr)
                 lines.append(
-                    f"  - [{rr.full_name}]({rr.html_url}) — **{format_duration_human(rr.inactive_days)}** "
+                    f"  - [{rr.full_name}]({rr.html_url}) `[{src_lbl}]` — **{format_duration_human(rr.inactive_days)}** "
                     f"without updates (last activity `{last_str}`){web_str}"
                 )
 
@@ -451,6 +483,8 @@ def render_json_report(report: DriftReport) -> str:
                         "last_activity_at": (
                             rr.last_activity_at.isoformat() if rr.last_activity_at else None
                         ),
+                        "archived_days": rr.archived_days,
+                        "archived_at": rr.archived_at.isoformat() if rr.archived_at else None,
                         "is_archived": rr.is_archived,
                         "is_disabled": rr.is_disabled,
                         "latest_release_tag": rr.latest_release_tag,

@@ -377,7 +377,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     )
     repo_results_map = await gh_checker.check_repos(combined_refs_for_api)
 
-    # 6. Assemble DriftReport
+    # 6. Assemble DriftReport (dropping unverified speculative `domain_heuristic` guesses)
     entry_results: list[EntryDriftResult] = []
     for entry, refs in zip(entries, entry_all_refs, strict=True):
         s_results = (
@@ -385,12 +385,25 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             if run_site_checks
             else []
         )
-        r_results = [repo_results_map[r.key] for r in refs if r.key in repo_results_map]
+        kept_refs: list[GitHubRef] = []
+        r_results = []
+        for r in refs:
+            rr = repo_results_map.get(r.key)
+            if rr is None:
+                continue
+            if r.source == "domain_heuristic" and rr.tier.value == "missing":
+                continue
+            kept_refs.append(r)
+            r_results.append(rr)
+
+        if not run_site_checks and not r_results:
+            continue
+
         entry_results.append(
             EntryDriftResult(
                 entry=entry,
                 site_results=s_results,
-                all_github_refs=refs,
+                all_github_refs=kept_refs,
                 repo_results=r_results,
             )
         )

@@ -128,6 +128,152 @@ MD_LINK_RE = re.compile(
 
 GITHUB_SLUG_PART_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+STATIC_PAGE_EXTENSIONS = (
+    ".html",
+    ".htm",
+    ".php",
+    ".asp",
+    ".aspx",
+    ".md",
+    ".txt",
+    ".pdf",
+    ".xml",
+    ".json",
+)
+
+MIRROR_OR_SECONDARY_LABELS = frozenset(
+    {
+        "mirror",
+        "mirrors",
+        "alt",
+        "alternative",
+        "onion",
+        ".onion",
+        "tor",
+        "i2p",
+        "beta",
+        "legacy",
+        "old",
+        "v2",
+        "lite",
+        "web",
+        "app",
+        "cli",
+        "gui",
+        "desktop",
+        "mobile",
+        "android",
+        "ios",
+        "windows",
+        "linux",
+        "mac",
+        "macos",
+        "extension",
+        "addon",
+        "userscript",
+        "github",
+        "gitlab",
+        "codeberg",
+        "source",
+        "repo",
+        "docs",
+        "documentation",
+        "wiki",
+        "guide",
+        "releases",
+        "download",
+    }
+)
+
+SHARED_HOSTING_SECOND_LEVEL = frozenset(
+    {
+        "co",
+        "com",
+        "org",
+        "net",
+        "edu",
+        "gov",
+        "ac",
+        "github",
+        "gitlab",
+        "bitbucket",
+        "codeberg",
+        "vercel",
+        "netlify",
+        "pages",
+        "workers",
+        "cloudflare",
+        "onrender",
+        "herokuapp",
+        "fly",
+        "railway",
+        "surge",
+        "glitch",
+        "replit",
+        "itch",
+        "substack",
+        "medium",
+        "wordpress",
+        "blogspot",
+        "tumblr",
+        "notion",
+        "gitbook",
+        "readthedocs",
+        "carrd",
+        "weebly",
+        "wixsite",
+        "firebaseapp",
+        "web",
+        "appspot",
+        "azurewebsites",
+        "amazonaws",
+        "cloudfront",
+        "google",
+        "apple",
+        "microsoft",
+        "mozilla",
+        "sourceforge",
+        "archive",
+    }
+)
+
+GENERIC_SUBDOMAINS = frozenset(
+    {
+        "www",
+        "app",
+        "api",
+        "docs",
+        "wiki",
+        "blog",
+        "mail",
+        "chat",
+        "forum",
+        "forums",
+        "community",
+        "status",
+        "cdn",
+        "dl",
+        "download",
+        "downloads",
+        "files",
+        "media",
+        "play",
+        "web",
+        "beta",
+        "dev",
+        "staging",
+        "demo",
+        "portal",
+        "auth",
+        "login",
+        "store",
+        "shop",
+        "news",
+        "help",
+        "support",
+    }
+)
+
 
 def _normalize_host(hostname: str | None) -> str:
     if not hostname:
@@ -199,9 +345,45 @@ def extract_github_pages_repo(url: str) -> tuple[str, str] | None:
         return None
 
     segments = [seg for seg in parts.path.split("/") if seg]
-    if segments and GITHUB_SLUG_PART_RE.match(segments[0]) and "." not in segments[0]:
+    if (
+        segments
+        and GITHUB_SLUG_PART_RE.match(segments[0])
+        and not segments[0].lower().endswith(STATIC_PAGE_EXTENSIONS)
+    ):
         return owner, segments[0]
     return owner, f"{owner}.github.io"
+
+
+def extract_custom_domain_repo_candidate(url: str, entry_title: str) -> tuple[str, str] | None:
+    """Infer speculative `(owner, repo)` from `<project>.<owner>.<tld>` (e.g. `abztract.arhamkhnz.com`)."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+
+    host = (parts.hostname or "").lower().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+
+    labels = host.split(".")
+    if len(labels) != 3:
+        return None
+
+    sub, middle, _tld = labels
+    if sub in GENERIC_SUBDOMAINS or middle in SHARED_HOSTING_SECOND_LEVEL:
+        return None
+    if len(sub) < 3 or len(middle) < 3:
+        return None
+    if not GITHUB_SLUG_PART_RE.match(sub) or not GITHUB_SLUG_PART_RE.match(middle):
+        return None
+
+    # Require `sub` to match the entry title so unrelated subdomains aren't guessed
+    norm_title = re.sub(r"[^a-z0-9]+", "", entry_title.lower())
+    norm_sub = re.sub(r"[^a-z0-9]+", "", sub.lower())
+    if not norm_title or (norm_sub not in norm_title and norm_title not in norm_sub):
+        return None
+
+    return middle, sub
 
 
 def extract_github_cdn_repo(url: str) -> tuple[str, str] | None:
@@ -279,8 +461,43 @@ def _clean_heading_text(raw: str) -> str:
 
 
 def _clean_label(raw: str) -> str:
-    text = raw.replace("**", "").replace("__", "").replace("`", "").strip()
+    # Strip markdown formatting and zero-width word-joiner characters used in FMHY
+    text = (
+        raw.replace("**", "")
+        .replace("__", "")
+        .replace("`", "")
+        .replace("\u2060", "")
+        .replace("\u200b", "")
+        .replace("\ufeff", "")
+        .strip()
+    )
     return text
+
+
+def _is_mirror_label(label: str) -> bool:
+    cleaned = label.strip().strip("[]()").lower()
+    if not cleaned or cleaned.isdigit():
+        return True
+    return cleaned in MIRROR_OR_SECONDARY_LABELS
+
+
+def _split_bullet_description(body: str) -> tuple[str, str]:
+    """Split an FMHY bullet into `(left_tools_part, right_desc_part)` on the first ` - ` outside links."""
+    depth_bracket = 0
+    depth_paren = 0
+    for i in range(len(body) - 2):
+        ch = body[i]
+        if ch == "[":
+            depth_bracket += 1
+        elif ch == "]" and depth_bracket > 0:
+            depth_bracket -= 1
+        elif ch == "(":
+            depth_paren += 1
+        elif ch == ")" and depth_paren > 0:
+            depth_paren -= 1
+        elif depth_bracket == 0 and depth_paren == 0 and body[i : i + 3] == " - ":
+            return body[:i], body[i + 3 :]
+    return body, ""
 
 
 def parse_markdown_content(
@@ -347,42 +564,40 @@ def parse_markdown_content(
         if not matches:
             continue
 
-        starred = ("⭐" in body) or ("🌟" in body) or (":star:" in body) or (":glowing_star:" in body)
+        starred = (
+            ("⭐" in body) or ("🌟" in body) or (":star:" in body) or (":glowing_star:" in body)
+        )
 
-        site_urls: list[str] = []
-        seen_sites: set[str] = set()
-        github_refs: list[GitHubRef] = []
-        seen_gh_keys: set[str] = set()
-        primary_title = ""
+        left_part, right_part = _split_bullet_description(body)
+        left_matches = MD_LINK_RE.findall(left_part)
+        right_matches = MD_LINK_RE.findall(right_part) if right_part else []
 
-        for raw_label, raw_url in matches:
+        # Group `left_part` links into distinct tools (splitting `[Tool A](...) or [Tool B](...)`,
+        # while keeping `[2]`, `[Mirror]`, `[GitHub]` attached to the current tool).
+        tool_groups: list[dict] = []
+
+        def _ingest_link(group: dict, raw_url: str, title_hint: str) -> None:
             url = clean_url(raw_url)
             if not url:
-                continue
-
-            label = _clean_label(raw_label)
-            if not primary_title and label and not label.isdigit():
-                primary_title = label
+                return
 
             gh_repo = extract_github_repo(url)
             if gh_repo is not None:
                 ref = GitHubRef(owner=gh_repo[0], repo=gh_repo[1], source="explicit_markdown")
-                if ref.key not in seen_gh_keys:
-                    seen_gh_keys.add(ref.key)
-                    github_refs.append(ref)
-                continue
+                if ref.key not in group["seen_gh"]:
+                    group["seen_gh"].add(ref.key)
+                    group["github_refs"].append(ref)
+                return
 
-            # Ignore non-repo github.com links (e.g. github.com/orgs/..., gist, etc.) as site targets
             host = (urlsplit(url).hostname or "").lower()
             if host in {"github.com", "www.github.com", "gist.github.com"}:
-                continue
-
+                return
             if _is_social_or_self_url(url, include_social=include_social):
-                continue
+                return
 
-            if url not in seen_sites:
-                seen_sites.add(url)
-                site_urls.append(url)
+            if url not in group["seen_sites"]:
+                group["seen_sites"].add(url)
+                group["site_urls"].append(url)
 
             gh_pages = extract_github_pages_repo(url)
             if gh_pages is not None:
@@ -392,10 +607,10 @@ def parse_markdown_content(
                     source="github_pages",
                     discovered_from_url=url,
                 )
-                if ref.key not in seen_gh_keys:
-                    seen_gh_keys.add(ref.key)
-                    github_refs.append(ref)
-                continue
+                if ref.key not in group["seen_gh"]:
+                    group["seen_gh"].add(ref.key)
+                    group["github_refs"].append(ref)
+                return
 
             gh_cdn = extract_github_cdn_repo(url)
             if gh_cdn is not None:
@@ -405,36 +620,92 @@ def parse_markdown_content(
                     source="github_cdn",
                     discovered_from_url=url,
                 )
-                if ref.key not in seen_gh_keys:
-                    seen_gh_keys.add(ref.key)
-                    github_refs.append(ref)
+                if ref.key not in group["seen_gh"]:
+                    group["seen_gh"].add(ref.key)
+                    group["github_refs"].append(ref)
+                return
 
-        if not site_urls and not github_refs:
-            continue
+            dom_cand = extract_custom_domain_repo_candidate(url, title_hint)
+            if dom_cand is not None:
+                ref = GitHubRef(
+                    owner=dom_cand[0],
+                    repo=dom_cand[1],
+                    source="domain_heuristic",
+                    discovered_from_url=url,
+                )
+                if ref.key not in group["seen_gh"]:
+                    group["seen_gh"].add(ref.key)
+                    group["github_refs"].append(ref)
 
-        if not primary_title:
-            if site_urls:
-                primary_title = urlsplit(site_urls[0]).hostname or site_urls[0]
-            else:
-                primary_title = github_refs[0].full_name
+        for raw_label, raw_url in left_matches:
+            label = _clean_label(raw_label)
+            if not tool_groups or (not _is_mirror_label(label) and tool_groups[-1]["title"]):
+                tool_groups.append(
+                    {
+                        "title": "" if _is_mirror_label(label) else label,
+                        "site_urls": [],
+                        "seen_sites": set(),
+                        "github_refs": [],
+                        "seen_gh": set(),
+                    }
+                )
+            elif not tool_groups[-1]["title"] and not _is_mirror_label(label):
+                tool_groups[-1]["title"] = label
+
+            _ingest_link(tool_groups[-1], raw_url, tool_groups[-1]["title"] or label)
+
+        if not tool_groups:
+            tool_groups.append(
+                {
+                    "title": "",
+                    "site_urls": [],
+                    "seen_sites": set(),
+                    "github_refs": [],
+                    "seen_gh": set(),
+                }
+            )
+
+        # Attach `right_part` links (e.g. `/ [GitHub](...)`) to the matching tool group
+        for raw_label, raw_url in right_matches:
+            label = _clean_label(raw_label)
+            target_group = tool_groups[0]
+            if len(tool_groups) > 1:
+                url_low = raw_url.lower()
+                for grp in tool_groups:
+                    t_clean = re.sub(r"[^a-z0-9]+", "", grp["title"].lower())
+                    if t_clean and len(t_clean) >= 3 and t_clean in re.sub(r"[^a-z0-9]+", "", url_low):
+                        target_group = grp
+                        break
+            if not target_group["title"] and not _is_mirror_label(label):
+                target_group["title"] = label
+            _ingest_link(target_group, raw_url, target_group["title"] or label)
 
         subcategory = " > ".join(part for part in (h2, h3) if part)
-        entry_id = f"{source_file}:{idx}"
+        valid_groups = [g for g in tool_groups if g["site_urls"] or g["github_refs"]]
 
-        entries.append(
-            WikiEntry(
-                entry_id=entry_id,
-                title=primary_title,
-                category=category,
-                subcategory=subcategory,
-                source_file=source_file,
-                line_number=idx,
-                starred=starred,
-                site_urls=site_urls,
-                github_refs=github_refs,
-                raw_line=line.strip(),
+        for sub_idx, grp in enumerate(valid_groups):
+            primary_title = grp["title"]
+            if not primary_title:
+                if grp["site_urls"]:
+                    primary_title = urlsplit(grp["site_urls"][0]).hostname or grp["site_urls"][0]
+                else:
+                    primary_title = grp["github_refs"][0].full_name
+
+            suffix = f"#{sub_idx + 1}" if len(valid_groups) > 1 else ""
+            entries.append(
+                WikiEntry(
+                    entry_id=f"{source_file}:{idx}{suffix}",
+                    title=primary_title,
+                    category=category,
+                    subcategory=subcategory,
+                    source_file=source_file,
+                    line_number=idx,
+                    starred=starred,
+                    site_urls=grp["site_urls"],
+                    github_refs=grp["github_refs"],
+                    raw_line=line.strip(),
+                )
             )
-        )
 
     return entries
 

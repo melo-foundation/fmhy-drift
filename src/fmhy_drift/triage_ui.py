@@ -347,16 +347,43 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     .col-cb { width: 26px; text-align: center !important; }
     .col-star { width: 24px; text-align: center !important; }
     .col-clip { width: 24px; text-align: center !important; }
-    .col-subject { width: 25%; }
-    .col-repo { width: 21%; }
-    .col-web { width: 25%; }
-    .col-cat { width: 14%; }
-    .col-status { width: 15%; }
+    .col-subject { width: 21%; }
+    .col-repo { width: 20%; }
+    .col-src { width: 11%; }
+    .col-web { width: 22%; }
+    .col-cat { width: 12%; }
+    .col-status { width: 14%; }
+    .src-pill {
+      display: inline-block;
+      padding: 0 5px;
+      border-radius: 2px;
+      font-size: 10.5px;
+      border: 1px solid #b5c4d8;
+      background: #eef3fa;
+      color: #243b56;
+    }
+    .src-pill.heur {
+      background: #fff6e0;
+      border-color: #dec178;
+      color: #6b4c00;
+    }
+    tr.selected .src-pill {
+      background: rgba(255,255,255,0.2);
+      border-color: rgba(255,255,255,0.55);
+      color: #ffffff;
+    }
 
     .star-on { color: #e69c00; font-size: 13px; }
     .star-off { color: #b8c4d4; font-size: 11px; }
     .bold-row td.col-subject, .bold-row td.col-repo { font-weight: 700; }
     .muted-cell { color: #4a5a6e; }
+    .row-link {
+      color: #0044aa;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .row-link:hover { color: #0066ff; }
+    tr.selected .row-link { color: #ffffff !important; }
     .repl-tag {
       color: #0b6b24;
       font-weight: 700;
@@ -578,8 +605,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       <div class="tb-sep"></div>
 
       <div class="tb-filter-group">
-        <label><input type="checkbox" id="starred-only" /> ★ Starred Only</label>
+        <label><input type="checkbox" id="starred-only" /> ★ Starred</label>
         <label><input type="checkbox" id="has-web-only" /> 📎 Has Site/Pages</label>
+        <select id="source-filter" class="tb-input" style="height:22px;padding:1px 4px;font-size:11px;">
+          <option value="">Source: All</option>
+          <option value="explicit">Linked on FMHY Only</option>
+          <option value="heuristic">Heuristics Only</option>
+        </select>
       </div>
 
       <div class="tb-search-wrap">
@@ -615,6 +647,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
                   <th class="col-clip" data-sort="links" title="Has Website / Pages / Replacement">📎</th>
                   <th class="col-subject" data-sort="title">Entry / Title</th>
                   <th class="col-repo" data-sort="repo">Repository</th>
+                  <th class="col-src" data-sort="source">Found Via</th>
                   <th class="col-web" data-sort="web">Website / Pages / New Repo</th>
                   <th class="col-cat" data-sort="cat">Category</th>
                   <th class="col-status" data-sort="days">Status / Age ▼</th>
@@ -783,6 +816,25 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       return state.whitelistUrls.has(item.wlKey);
     }
 
+    function formatSourceBadge(src) {
+      if (!src || src === "explicit_markdown") {
+        return { short: "Linked on FMHY", full: "Linked directly on FMHY markdown", isHeur: false };
+      }
+      if (src === "github_pages") {
+        return { short: "Heuristic (github.io)", full: "Inferred from *.github.io URL heuristic", isHeur: true };
+      }
+      if (src === "github_cdn") {
+        return { short: "Heuristic (Raw/CDN)", full: "Inferred from raw/jsdelivr/githack CDN URL", isHeur: true };
+      }
+      if (src === "domain_heuristic") {
+        return { short: "Heuristic (Domain)", full: "Inferred from <repo>.<owner>.<tld> subdomain", isHeur: true };
+      }
+      if (src === "discovered_on_site") {
+        return { short: "Scraped on Site", full: "Discovered on live website HTML", isHeur: true };
+      }
+      return { short: src, full: src, isHeur: true };
+    }
+
     function formatAgeHuman(days) {
       if (days == null || days < 0 || days >= 999999) return null;
       const yrs = Math.floor(days / 365);
@@ -865,8 +917,11 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             tier: rr.tier,
             fullName: rr.full_name,
             htmlUrl: rr.html_url,
+            source: rr.source || "explicit_markdown",
             inactiveDays: rr.inactive_days,
             lastActivityAt: rr.last_activity_at ? rr.last_activity_at.slice(0, 10) : null,
+            archivedDays: rr.archived_days != null ? rr.archived_days : null,
+            archivedAt: rr.archived_at ? rr.archived_at.slice(0, 10) : null,
             sortDays: rr.inactive_days != null ? rr.inactive_days : 1000000,
             reason: rr.reason,
             replacementUrl: rr.replacement_url || null,
@@ -928,13 +983,16 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       const q = document.getElementById("search").value.trim().toLowerCase();
       const starredOnly = document.getElementById("starred-only").checked;
       const hasWebOnly = document.getElementById("has-web-only").checked;
+      const srcMode = document.getElementById("source-filter").value;
 
       const list = itemsForFolder(state.activeFolder).filter(it => {
         if (state.activeCategory && it.category !== state.activeCategory) return false;
         if (starredOnly && !it.starred) return false;
         if (hasWebOnly && (!it.webUrls || it.webUrls.length === 0)) return false;
+        if (srcMode === "explicit" && it.kind === "repo" && it.source !== "explicit_markdown") return false;
+        if (srcMode === "heuristic" && (it.kind !== "repo" || it.source === "explicit_markdown")) return false;
         if (!q) return true;
-        const hay = `${it.title} ${it.catLabel} ${it.fullName || ""} ${it.siteUrl || ""} ${it.replacementUrl || ""} ${(it.webUrls || []).join(" ")}`.toLowerCase();
+        const hay = `${it.title} ${it.catLabel} ${it.fullName || ""} ${it.siteUrl || ""} ${it.replacementUrl || ""} ${it.source || ""} ${(it.webUrls || []).join(" ")}`.toLowerCase();
         return hay.includes(q);
       });
 
@@ -945,6 +1003,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         else if (state.sortField === "links") { va = (a.webUrls?.length || 0) + (a.replacementUrl ? 5 : 0); vb = (b.webUrls?.length || 0) + (b.replacementUrl ? 5 : 0); }
         else if (state.sortField === "title") { return dir * a.title.localeCompare(b.title); }
         else if (state.sortField === "repo") { return dir * (a.fullName || "").localeCompare(b.fullName || ""); }
+        else if (state.sortField === "source") { return dir * (a.source || "").localeCompare(b.source || ""); }
         else if (state.sortField === "cat") { return dir * a.catLabel.localeCompare(b.catLabel); }
         else if (state.sortField === "web") { va = a.replacementUrl || a.webUrls?.[0] || ""; vb = b.replacementUrl || b.webUrls?.[0] || ""; return dir * va.localeCompare(vb); }
         else {
@@ -1009,14 +1068,22 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     function formatStatusCell(it) {
       const age = formatAgeHuman(it.inactiveDays);
+      const archAge = formatAgeHuman(it.archivedDays);
       if (it.kind === "site") return `${it.siteStatus}: ${it.reason}`;
       if (it.tier === "missing") {
-        if (age) return `Disabled · ${age}`;
-        if (it.reason.includes("451")) return "Dead (DMCA 451)";
-        return "Dead (404 Gone)";
+        if (it.reason.includes("disabled")) {
+          return age ? `Disabled · ${age}` : "Disabled";
+        }
+        if (it.reason.includes("451")) {
+          return age ? `DMCA 451 · ${age}` : "Dead (DMCA 451)";
+        }
+        return age ? `404 · last seen ${age}` : "Dead (404 Gone)";
       }
       if (it.tier === "archived") {
-        return age ? `Archived · ${age}` : "Archived";
+        if (archAge && it.archivedAt) {
+          return `Archived ${archAge} ago (${it.archivedAt})`;
+        }
+        return age ? `Archived · last push ${age}` : "Archived";
       }
       return age ? `${age} ago` : `${it.inactiveDays}d ago`;
     }
@@ -1024,11 +1091,11 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     function formatWebCell(it) {
       const parts = [];
       if (it.replacementUrl) {
-        parts.push(`<span class="repl-tag">↪ ${escapeHtml(shortUrlLabel(it.replacementUrl))}</span>`);
+        parts.push(`<a href="${escapeHtml(it.replacementUrl)}" target="_blank" rel="noopener" class="row-link repl-tag" onclick="event.stopPropagation()">↪ ${escapeHtml(shortUrlLabel(it.replacementUrl))}</a>`);
       }
       for (const u of (it.webUrls || [])) {
         const prefix = isPagesUrl(u) ? "Pages:" : "Web:";
-        parts.push(`${prefix} ${escapeHtml(shortUrlLabel(u))}`);
+        parts.push(`<a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="row-link" onclick="event.stopPropagation()">${prefix} ${escapeHtml(shortUrlLabel(u))}</a>`);
       }
       return parts.join(" · ") || `<span class="muted-cell">—</span>`;
     }
@@ -1057,12 +1124,22 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
         const hasClip = (it.webUrls && it.webUrls.length > 0) || Boolean(it.replacementUrl);
 
+        const repoCellHtml = it.kind === "repo"
+          ? `<a href="${escapeHtml(it.htmlUrl)}" target="_blank" rel="noopener" class="row-link" onclick="event.stopPropagation()">${escapeHtml(it.fullName)}</a>`
+          : `<a href="${escapeHtml(it.siteUrl)}" target="_blank" rel="noopener" class="row-link" onclick="event.stopPropagation()">${escapeHtml(shortUrlLabel(it.siteUrl))}</a>`;
+
+        const srcInfo = it.kind === "repo"
+          ? formatSourceBadge(it.source)
+          : { short: "FMHY Site", full: "Website URL from FMHY", isHeur: false };
+        const srcCellHtml = `<span class="src-pill${srcInfo.isHeur ? " heur" : ""}" title="${escapeHtml(srcInfo.full)}">${escapeHtml(srcInfo.short)}</span>`;
+
         tr.innerHTML = `
           <td class="col-cb"><input type="checkbox" class="row-cb" ${isTicked ? "checked" : ""} /></td>
           <td class="col-star">${it.starred ? '<span class="star-on">★</span>' : '<span class="star-off">•</span>'}</td>
           <td class="col-clip">${hasClip ? "📎" : ""}</td>
           <td class="col-subject" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}</td>
-          <td class="col-repo" title="${escapeHtml(it.fullName || it.siteUrl || "")}">${escapeHtml(it.kind === "repo" ? it.fullName : shortUrlLabel(it.siteUrl))}</td>
+          <td class="col-repo" title="${escapeHtml(it.fullName || it.siteUrl || "")}">${repoCellHtml}</td>
+          <td class="col-src">${srcCellHtml}</td>
           <td class="col-web">${formatWebCell(it)}</td>
           <td class="col-cat muted-cell" title="${escapeHtml(it.catLabel)}">${escapeHtml(it.catLabel)}</td>
           <td class="col-status" title="${escapeHtml(it.reason)}">${escapeHtml(formatStatusCell(it))}</td>
@@ -1135,14 +1212,20 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
       let detailsHtml = "";
       if (it.kind === "repo") {
+        const sInfo = formatSourceBadge(it.source);
         detailsHtml += `<div class="tb-detail-row"><strong>GitHub Repository:</strong> <a href="${escapeHtml(it.htmlUrl)}" target="_blank" rel="noopener">${escapeHtml(it.htmlUrl)}</a></div>`;
+        detailsHtml += `<div class="tb-detail-row"><strong>How Repo Was Found:</strong> ${escapeHtml(sInfo.full)}</div>`;
       } else {
         detailsHtml += `<div class="tb-detail-row"><strong>Target URL:</strong> <a href="${escapeHtml(it.siteUrl)}" target="_blank" rel="noopener">${escapeHtml(it.siteUrl)}</a></div>`;
       }
       const ageTxt = formatAgeHuman(it.inactiveDays);
+      const archAgeTxt = formatAgeHuman(it.archivedDays);
       const lastDateTxt = it.lastActivityAt ? ` (last push ${escapeHtml(it.lastActivityAt)})` : "";
+      if (archAgeTxt && it.archivedAt) {
+        detailsHtml += `<div class="tb-detail-row"><strong>Archived When:</strong> <strong>${escapeHtml(archAgeTxt)} ago</strong> (${escapeHtml(it.archivedAt)})</div>`;
+      }
       if (ageTxt) {
-        detailsHtml += `<div class="tb-detail-row"><strong>Time Since Last Update:</strong> <strong>${escapeHtml(ageTxt)}</strong>${lastDateTxt}</div>`;
+        detailsHtml += `<div class="tb-detail-row"><strong>Last Update / Seen:</strong> <strong>${escapeHtml(ageTxt)} ago</strong>${lastDateTxt}</div>`;
       }
       detailsHtml += `<div class="tb-detail-row"><strong>Status Detail:</strong> ${escapeHtml(it.reason)}</div>`;
 
@@ -1201,6 +1284,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           const note = (state.notes[it.id] || "").trim();
           const noteSuffix = note ? ` — *${note}*` : "";
           if (it.kind === "repo") {
+            const srcTag = formatSourceBadge(it.source).short;
             const webPart = (it.webUrls && it.webUrls.length)
               ? " | Web: " + it.webUrls.map(u => `<${u}>`).join(", ")
               : "";
@@ -1208,13 +1292,16 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
               ? ` | -> New Repo: <${it.replacementUrl}>${it.replacementStatus ? ` (${it.replacementStatus})` : ""}`
               : "";
             const ageStr = formatAgeHuman(it.inactiveDays);
+            const archStr = formatAgeHuman(it.archivedDays);
             const datePart = it.lastActivityAt ? `, last push ${it.lastActivityAt}` : "";
             const detail = it.tier === "missing"
-              ? (ageStr ? `${it.reason} — ${ageStr} without updates` : it.reason)
+              ? (ageStr ? `${it.reason} — ${ageStr} ago` : it.reason)
               : (it.tier === "archived"
-                  ? `archived${ageStr ? ` — ${ageStr} without updates${datePart}` : ""}`
+                  ? (archStr && it.archivedAt
+                      ? `archived ${archStr} ago (${it.archivedAt})${datePart}`
+                      : `archived${ageStr ? ` — last push ${ageStr} ago${datePart}` : ""}`)
                   : `${ageStr || (it.inactiveDays + "d")} without updates${datePart}`);
-            lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.htmlUrl}> (${detail})${webPart}${replPart}${noteSuffix}`);
+            lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.htmlUrl}> [${srcTag}] (${detail})${webPart}${replPart}${noteSuffix}`);
           } else {
             lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.siteUrl}> (${it.reason})${noteSuffix}`);
           }
@@ -1323,6 +1410,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     document.getElementById("search").oninput = () => { state.page = 0; renderTable(); };
     document.getElementById("starred-only").onchange = () => { state.page = 0; renderTable(); };
     document.getElementById("has-web-only").onchange = () => { state.page = 0; renderTable(); };
+    document.getElementById("source-filter").onchange = () => { state.page = 0; renderTable(); };
 
     document.getElementById("prev-pg").onclick = () => { if (state.page > 0) { state.page--; renderTable(); } };
     document.getElementById("next-pg").onclick = () => { state.page++; renderTable(); };
