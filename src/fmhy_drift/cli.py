@@ -14,6 +14,8 @@ from fmhy_drift.models import (
     DriftReport,
     EntryDriftResult,
     GitHubRef,
+    ProxyVerification,
+    SiteCheckResult,
     TierThresholds,
     WikiEntry,
 )
@@ -42,23 +44,39 @@ def _env_int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fmhy-drift",
         description=(
-            "Check all FMHY index sites for liveness (strictly via proxy, never direct runner IP) "
-            "and audit linked or auto-discovered GitHub repositories for inactivity."
+            "Check FMHY index sites for liveness (strictly via proxy, never direct runner IP) "
+            "and/or audit linked GitHub repositories for inactivity."
         ),
+    )
+    parser.add_argument(
+        "--github-only",
+        action="store_true",
+        default=_env_bool("GITHUB_ONLY", False),
+        help="Only check linked GitHub repositories via GitHub API (skips site liveness; no proxy needed).",
     )
     parser.add_argument(
         "--proxy",
         default=os.environ.get("PROXY_URL", ""),
-        help="Mandatory HTTP/HTTPS/SOCKS5 proxy URL for site liveness checks (or set PROXY_URL).",
+        help="HTTP/HTTPS/SOCKS5 proxy URL required for site liveness checks (or set PROXY_URL).",
     )
     parser.add_argument(
         "--skip-without-proxy",
         action="store_true",
-        help="Exit cleanly with code 0 instead of failing if no proxy URL is provided (useful in CI).",
+        help=(
+            "If no proxy URL is provided, skip site liveness checks instead of failing "
+            "and run only the GitHub repository activity checks."
+        ),
     )
     parser.add_argument(
         "--input",
@@ -108,7 +126,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--discover-github",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Auto-discover linked GitHub repositories on live site homepages (default: enabled).",
+        help="Auto-discover linked GitHub repositories on live site homepages when site checks run (default: enabled).",
     )
     parser.add_argument(
         "--include-social",
@@ -166,11 +184,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def _filter_entries(
     entries: list[WikiEntry],
     *,
+    github_only: bool,
     category_filter: str,
     starred_only: bool,
     max_entries: int,
 ) -> list[WikiEntry]:
     filtered = entries
+    if github_only:
+        filtered = [e for e in filtered if e.github_refs]
     if category_filter.strip():
         needle = category_filter.strip().lower()
         filtered = [
@@ -190,7 +211,6 @@ def _write_github_step_summary(markdown_text: str) -> None:
     if not summary_path:
         return
     path = Path(summary_path)
-    # GitHub Step Summary limit is 1 MiB; write truncated view if report is larger
     encoded = markdown_text.encode("utf-8")
     if len(encoded) > 950_000:
         truncated = encoded[:900_000].decode("utf-8", errors="ignore")
@@ -207,37 +227,48 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         tier3_days=args.warn_days_3,
     )
 
-    # 1. Enforce mandatory proxy BEFORE any site scanning
-    try:
-        proxy_url = validate_proxy_url(args.proxy)
-    except ProxyMissingError as exc:
-        if args.skip_without_proxy:
-            msg = (
-                "⏭️ Skipping FMHY drift check: no proxy configured (PROXY_URL is unset). "
-                "Site liveness checks never run directly from a GitHub runner."
-            )
-            print(msg)
-            _write_github_step_summary(f"### FMHY Drift Check Skipped\n\n{msg}\n")
-            return 0
-        print(f"Error: {exc}", file=sys.stderr)
-        return 2
-    except ProxyGuardError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 2
+    run_site_checks = not args.github_only
+    proxy_url: str | None = None
+    proxy_verification: ProxyVerification | None = None
 
-    print("Verifying proxy egress isolation...", flush=True)
-    try:
-        proxy_verification = await verify_proxy_egress(proxy_url)
-    except ProxyGuardError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 2
+    # 1. Enforce mandatory proxy for site liveness checks (never touch sites from runner IP)
+    if run_site_checks:
+        try:
+            proxy_url = validate_proxy_url(args.proxy)
+        except ProxyMissingError as exc:
+            if args.skip_without_proxy:
+                print(
+                    "⏭️ No proxy configured (PROXY_URL unset): skipping site liveness checks "
+                    "(never run from a GitHub runner IP) and running GitHub repository checks only.",
+                    flush=True,
+                )
+                run_site_checks = False
+            else:
+                print(
+                    f"Error: {exc}\nHint: Pass --github-only to check linked GitHub repositories without a proxy.",
+                    file=sys.stderr,
+                )
+                return 2
+        except ProxyGuardError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
 
-    print(
-        f"Proxy verified: {proxy_verification.redacted_proxy} "
-        f"(fingerprint={proxy_verification.egress_ip_sha256_prefix}, "
-        f"isolated={proxy_verification.verified_distinct_from_host})",
-        flush=True,
-    )
+    if run_site_checks and proxy_url is not None:
+        print("Verifying proxy egress isolation...", flush=True)
+        try:
+            proxy_verification = await verify_proxy_egress(proxy_url)
+        except ProxyGuardError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+
+        print(
+            f"Proxy verified: {proxy_verification.redacted_proxy} "
+            f"(fingerprint={proxy_verification.egress_ip_sha256_prefix}, "
+            f"isolated={proxy_verification.verified_distinct_from_host})",
+            flush=True,
+        )
+    else:
+        print("Mode: GitHub repository activity check only (site liveness skipped).", flush=True)
 
     # 2. Load FMHY index
     if args.input is not None:
@@ -247,35 +278,41 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         index_source = args.index_url
         entries = await fetch_remote_index(
             args.index_url,
-            proxy_url=proxy_url if args.proxy_index else None,
+            proxy_url=proxy_url if (args.proxy_index and proxy_url) else None,
             include_social=args.include_social,
         )
 
     entries = _filter_entries(
         entries,
+        github_only=not run_site_checks,
         category_filter=args.category,
         starred_only=args.starred_only,
         max_entries=args.max_entries,
     )
 
-    all_site_urls = [u for e in entries for u in e.site_urls]
-    unique_site_count = len(dict.fromkeys(all_site_urls))
-    print(
-        f"Loaded {len(entries)} FMHY entries ({unique_site_count} unique site URLs). "
-        "Running liveness checks via proxy...",
-        flush=True,
-    )
+    # 3. Optional site liveness checks (strictly via verified proxy)
+    site_results_map: dict[str, SiteCheckResult] = {}
+    unique_site_count = 0
 
-    # 3. Check site liveness (strictly via proxy) & discover homepage GitHub links
-    site_checker = SiteChecker(
-        proxy_url=proxy_url,
-        concurrency=args.concurrency,
-        timeout=args.timeout,
-        discover_github=args.discover_github,
-    )
-    site_results_map = await site_checker.check_urls(all_site_urls)
+    if run_site_checks and proxy_url is not None:
+        all_site_urls = [u for e in entries for u in e.site_urls]
+        unique_site_count = len(dict.fromkeys(all_site_urls))
+        print(
+            f"Loaded {len(entries)} FMHY entries ({unique_site_count} unique site URLs). "
+            "Running liveness checks via proxy...",
+            flush=True,
+        )
+        site_checker = SiteChecker(
+            proxy_url=proxy_url,
+            concurrency=args.concurrency,
+            timeout=args.timeout,
+            discover_github=args.discover_github,
+        )
+        site_results_map = await site_checker.check_urls(all_site_urls)
+    else:
+        print(f"Loaded {len(entries)} FMHY entries with linked GitHub repositories.", flush=True)
 
-    # 4. Merge explicit FMHY GitHub refs + homepage auto-discovered GitHub refs
+    # 4. Merge explicit FMHY GitHub refs + any homepage auto-discovered GitHub refs
     entry_all_refs: list[list[GitHubRef]] = []
     combined_refs_for_api: list[GitHubRef] = []
 
@@ -283,7 +320,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         merged: list[GitHubRef] = list(entry.github_refs)
         seen_keys = {r.key for r in merged}
 
-        if args.discover_github:
+        if run_site_checks and args.discover_github:
             raw_candidates: list[GitHubRef] = []
             for u in entry.site_urls:
                 sr = site_results_map.get(u)
@@ -309,14 +346,18 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     gh_checker = GitHubActivityChecker(
         thresholds=thresholds,
         github_token=args.github_token or None,
-        proxy_url=proxy_url if args.proxy_github else None,
+        proxy_url=proxy_url if (args.proxy_github and proxy_url) else None,
     )
     repo_results_map = await gh_checker.check_repos(combined_refs_for_api)
 
     # 6. Assemble DriftReport
     entry_results: list[EntryDriftResult] = []
     for entry, refs in zip(entries, entry_all_refs, strict=True):
-        s_results = [site_results_map[u] for u in entry.site_urls if u in site_results_map]
+        s_results = (
+            [site_results_map[u] for u in entry.site_urls if u in site_results_map]
+            if run_site_checks
+            else []
+        )
         r_results = [repo_results_map[r.key] for r in refs if r.key in repo_results_map]
         entry_results.append(
             EntryDriftResult(
@@ -350,13 +391,18 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
 
     summary = summarize_report(report)
     print(
-        f"Done! Sites: {summary.sites_alive} alive, {summary.sites_dead} dead, "
-        f"{summary.sites_parked} parked, {summary.sites_waf_or_rate_limited} WAF | "
-        f"GitHub: {summary.repos_active} active, {summary.repos_tier1_notice} >= {thresholds.tier1_days}d, "
+        f"Done! GitHub: {summary.repos_active} active, "
+        f"{summary.repos_tier1_notice} >= {thresholds.tier1_days}d, "
         f"{summary.repos_tier2_warning} >= {thresholds.tier2_days}d, "
         f"{summary.repos_tier3_critical} >= {thresholds.tier3_days}d, "
-        f"{summary.repos_archived} archived, {summary.repos_missing} missing, "
-        f"{summary.newly_discovered_github_links} newly discovered.",
+        f"{summary.repos_archived} archived, {summary.repos_missing} missing"
+        + (
+            f" | Sites: {summary.sites_alive} alive, {summary.sites_dead} dead, "
+            f"{summary.sites_parked} parked, {summary.sites_waf_or_rate_limited} WAF, "
+            f"{summary.newly_discovered_github_links} newly discovered."
+            if run_site_checks
+            else " (site liveness skipped)."
+        ),
         flush=True,
     )
     print(f"Reports written to {args.markdown_out} and {args.json_out}", flush=True)

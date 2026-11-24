@@ -82,7 +82,14 @@ WAF_CHALLENGE_SIGNATURES = (
 
 CLOUDFLARE_ORIGIN_DOWN_CODES = frozenset({520, 521, 522, 523, 524, 525, 526, 530})
 
-HREF_RE = re.compile(r"""<a\b[^>]*?\bhref\s*=\s*["']([^"'<>]+)["']""", re.IGNORECASE)
+HREF_RE = re.compile(
+    r"""<(?:a|link)\b[^>]*?\bhref\s*=\s*["']([^"'<>]+)["']""",
+    re.IGNORECASE,
+)
+INLINE_GITHUB_URL_RE = re.compile(
+    r"""https?://(?:www\.)?github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+""",
+    re.IGNORECASE,
+)
 
 
 def _tokenize_identifier(text: str) -> set[str]:
@@ -111,11 +118,16 @@ def discover_github_repos_in_html(
     scored: list[tuple[int, int, GitHubRef]] = []
     seen_keys: set[str] = set()
 
-    for order_idx, raw_href in enumerate(HREF_RE.findall(html_snippet)):
+    raw_urls: list[str] = []
+    for raw_href in HREF_RE.findall(html_snippet):
         unescaped = html.unescape(raw_href.strip())
-        if "github.com" not in unescaped.lower():
-            continue
-        resolved = urljoin(page_url, unescaped)
+        if "github.com" in unescaped.lower():
+            raw_urls.append(urljoin(page_url, unescaped))
+    # Also catch GitHub URLs embedded in SPA hydration JSON / script props (Next.js, Astro, SvelteKit)
+    for inline_url in INLINE_GITHUB_URL_RE.findall(html_snippet):
+        raw_urls.append(inline_url)
+
+    for order_idx, resolved in enumerate(raw_urls):
         extracted = extract_github_repo(resolved)
         if extracted is None:
             continue

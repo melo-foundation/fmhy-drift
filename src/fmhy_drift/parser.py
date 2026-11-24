@@ -204,6 +204,50 @@ def extract_github_pages_repo(url: str) -> tuple[str, str] | None:
     return owner, f"{owner}.github.io"
 
 
+def extract_github_cdn_repo(url: str) -> tuple[str, str] | None:
+    """Derive (owner, repo) from raw/CDN URLs (raw.githubusercontent, jsDelivr, githack, statically)."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+
+    host = (parts.hostname or "").lower()
+    segments = [seg for seg in parts.path.split("/") if seg]
+
+    owner = ""
+    repo = ""
+
+    if host in {
+        "raw.githubusercontent.com",
+        "codeload.github.com",
+        "raw.githack.com",
+        "rawcdn.githack.com",
+    }:
+        if len(segments) >= 2:
+            owner, repo = segments[0], segments[1]
+    elif host in {"cdn.jsdelivr.net", "fastly.jsdelivr.net", "gcore.jsdelivr.net"}:
+        # Format: /gh/<owner>/<repo>@<version>/file... or /gh/<owner>/<repo>/file...
+        if len(segments) >= 3 and segments[0].lower() == "gh":
+            owner = segments[1]
+            repo = segments[2].split("@", 1)[0]
+    elif host == "cdn.statically.io":
+        # Format: /gh/<owner>/<repo>/<branch>/file...
+        if len(segments) >= 3 and segments[0].lower() == "gh":
+            owner, repo = segments[1], segments[2].split("@", 1)[0]
+
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+
+    if not owner or not repo:
+        return None
+    if not GITHUB_SLUG_PART_RE.match(owner) or not GITHUB_SLUG_PART_RE.match(repo):
+        return None
+    if owner.lower() == "fmhy":
+        return None
+
+    return owner, repo
+
+
 def _is_social_or_self_url(url: str, *, include_social: bool) -> bool:
     parts = urlsplit(url)
     raw_host = (parts.hostname or "").lower()
@@ -346,6 +390,19 @@ def parse_markdown_content(
                     owner=gh_pages[0],
                     repo=gh_pages[1],
                     source="github_pages",
+                    discovered_from_url=url,
+                )
+                if ref.key not in seen_gh_keys:
+                    seen_gh_keys.add(ref.key)
+                    github_refs.append(ref)
+                continue
+
+            gh_cdn = extract_github_cdn_repo(url)
+            if gh_cdn is not None:
+                ref = GitHubRef(
+                    owner=gh_cdn[0],
+                    repo=gh_cdn[1],
+                    source="github_cdn",
                     discovered_from_url=url,
                 )
                 if ref.key not in seen_gh_keys:

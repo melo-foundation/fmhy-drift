@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fmhy_drift.parser import (
+    extract_github_cdn_repo,
     extract_github_pages_repo,
     extract_github_repo,
     load_local_index,
@@ -54,6 +55,21 @@ def test_extract_github_pages_repo() -> None:
         "bob",
         "bob.github.io",
     )
+
+
+def test_extract_github_cdn_repo() -> None:
+    assert extract_github_cdn_repo(
+        "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt"
+    ) == ("uBlockOrigin", "uAssets")
+    assert extract_github_cdn_repo(
+        "https://cdn.jsdelivr.net/gh/pixeltris/TwitchAdSolutions@master/vaft/vaft.user.js"
+    ) == ("pixeltris", "TwitchAdSolutions")
+    assert extract_github_cdn_repo(
+        "https://raw.githack.com/owner/cool-script/main/script.user.js"
+    ) == ("owner", "cool-script")
+    assert extract_github_cdn_repo(
+        "https://cdn.statically.io/gh/org/filterlist/main/list.txt"
+    ) == ("org", "filterlist")
 
 
 def test_parse_markdown_content_extracts_entries_and_skips_noise() -> None:

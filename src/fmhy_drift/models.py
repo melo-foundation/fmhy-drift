@@ -30,7 +30,12 @@ class StalenessTier(StrEnum):
     ERROR = "error"
 
 
-GitHubRefSource = Literal["explicit_markdown", "github_pages", "discovered_on_site"]
+GitHubRefSource = Literal[
+    "explicit_markdown",
+    "github_pages",
+    "github_cdn",
+    "discovered_on_site",
+]
 
 
 @dataclass(frozen=True)
@@ -196,7 +201,7 @@ class DriftReport:
     generated_at: datetime
     index_source: str
     thresholds: TierThresholds
-    proxy_verification: ProxyVerification
+    proxy_verification: ProxyVerification | None
     entries: list[EntryDriftResult]
     unique_sites_checked: int
     unique_repos_checked: int

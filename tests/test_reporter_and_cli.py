@@ -1,4 +1,4 @@
-"""Unit tests for Markdown/JSON reporting, Discord webhook sending, and CLI proxy skip behavior."""
+"""Unit tests for Markdown/JSON reporting, Discord webhook sending, and GitHub-only / proxy-skip modes."""
 
 from __future__ import annotations
 
@@ -23,13 +23,14 @@ from fmhy_drift.models import (
     WikiEntry,
 )
 from fmhy_drift.reporter import (
+    build_discord_payload,
     render_json_report,
     render_markdown_report,
     send_discord_webhook,
 )
 
 
-def _sample_report() -> DriftReport:
+def _sample_report(*, github_only: bool = False) -> DriftReport:
     entry = WikiEntry(
         entry_id="tools.md:5",
         title="AbandonTool",
@@ -39,25 +40,33 @@ def _sample_report() -> DriftReport:
         line_number=5,
         starred=True,
         site_urls=["https://abandontool.example.com/"],
-        github_refs=[],
+        github_refs=[GitHubRef("dev", "abandontool", "explicit_markdown")] if github_only else [],
     )
-    discovered_ref = GitHubRef(
-        owner="dev",
-        repo="abandontool",
-        source="discovered_on_site",
-        discovered_from_url="https://abandontool.example.com/",
+    ref = (
+        entry.github_refs[0]
+        if github_only
+        else GitHubRef(
+            owner="dev",
+            repo="abandontool",
+            source="discovered_on_site",
+            discovered_from_url="https://abandontool.example.com/",
+        )
     )
     entry_res = EntryDriftResult(
         entry=entry,
-        site_results=[
-            SiteCheckResult(
-                url="https://abandontool.example.com/",
-                status=SiteStatus.DEAD,
-                http_status=404,
-                reason="Not found / removed (HTTP 404)",
-            )
-        ],
-        all_github_refs=[discovered_ref],
+        site_results=(
+            []
+            if github_only
+            else [
+                SiteCheckResult(
+                    url="https://abandontool.example.com/",
+                    status=SiteStatus.DEAD,
+                    http_status=404,
+                    reason="Not found / removed (HTTP 404)",
+                )
+            ]
+        ),
+        all_github_refs=[ref],
         repo_results=[
             RepoActivityResult(
                 owner="dev",
@@ -73,35 +82,69 @@ def _sample_report() -> DriftReport:
         generated_at=datetime(2026, 11, 24, 12, 0, 0, tzinfo=UTC),
         index_source="tools.md",
         thresholds=TierThresholds(90, 180, 365),
-        proxy_verification=ProxyVerification(
-            redacted_proxy="socks5h://***:***@203.0.x.x:1080",
-            egress_ip_sha256_prefix="a1b2c3d4e5f6",
-            verified_distinct_from_host=True,
+        proxy_verification=(
+            None
+            if github_only
+            else ProxyVerification(
+                redacted_proxy="socks5h://***:***@203.0.x.x:1080",
+                egress_ip_sha256_prefix="a1b2c3d4e5f6",
+                verified_distinct_from_host=True,
+            )
         ),
         entries=[entry_res],
-        unique_sites_checked=1,
+        unique_sites_checked=0 if github_only else 1,
         unique_repos_checked=1,
     )
 
 
-def test_cli_refuses_or_skips_when_no_proxy_provided(
+def test_cli_refuses_site_checks_without_proxy_unless_github_only_or_skip_flag(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("PROXY_URL", raising=False)
-    summary_file = tmp_path / "step_summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
-
-    # Without --skip-without-proxy -> exit code 2
+    # Without --proxy, --github-only, or --skip-without-proxy -> exit code 2
     assert main(["--proxy", ""]) == 2
 
-    # With --skip-without-proxy -> clean exit 0 and writes step summary
-    assert main(["--proxy", "", "--skip-without-proxy"]) == 0
-    assert "Skipping FMHY drift check" in summary_file.read_text(encoding="utf-8")
+    # With --github-only on a local markdown file with 0 repos -> runs cleanly with zero proxy!
+    md_in = tmp_path / "sample.md"
+    md_in.write_text("# Tools\n* [SiteOnly](https://example.com)\n", encoding="utf-8")
+    md_out = tmp_path / "out.md"
+    json_out = tmp_path / "out.json"
+    assert (
+        main(
+            [
+                "--github-only",
+                "--input",
+                str(md_in),
+                "--markdown-out",
+                str(md_out),
+                "--json-out",
+                str(json_out),
+            ]
+        )
+        == 0
+    )
+    assert "GitHub-Only" in md_out.read_text(encoding="utf-8")
+
+
+def test_github_only_report_and_discord_payload() -> None:
+    report = _sample_report(github_only=True)
+    md = render_markdown_report(report)
+    assert "GitHub-Only" in md
+    assert "Skipped in GitHub-only mode" in md
+    assert "dev/abandontool" in md
+
+    data = json.loads(render_json_report(report))
+    assert data["mode"] == "github_only"
+    assert data["proxy_verification"] is None
+    assert data["summary"]["repos_tier2_warning"] == 1
+
+    discord = build_discord_payload(report)
+    assert discord["embeds"][0]["title"] == "FMHY GitHub Activity & Staleness Check"
 
 
 def test_markdown_and_json_reports_and_discord_webhook(tmp_path: Path) -> None:
-    report = _sample_report()
+    report = _sample_report(github_only=False)
 
     md = render_markdown_report(report)
     assert "AbandonTool" in md
@@ -111,6 +154,7 @@ def test_markdown_and_json_reports_and_discord_webhook(tmp_path: Path) -> None:
     assert "Newly Discovered GitHub Repositories" in md
 
     parsed_json = json.loads(render_json_report(report))
+    assert parsed_json["mode"] == "full"
     assert parsed_json["summary"]["sites_dead"] == 1
     assert parsed_json["summary"]["repos_tier2_warning"] == 1
     assert parsed_json["summary"]["newly_discovered_github_links"] == 1
