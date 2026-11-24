@@ -96,6 +96,28 @@ def summarize_report(report: DriftReport) -> ReportSummary:
     )
 
 
+def format_duration_human(inactive_days: int | None) -> str:
+    """Format `inactive_days` as a readable span like `3y 4m (1,220d)` or `5m 12d (162d)`."""
+    if inactive_days is None:
+        return "unknown age"
+    years, rem = divmod(inactive_days, 365)
+    months, days = divmod(rem, 30)
+    if years >= 1:
+        span = f"{years}y {months}m" if months else f"{years}y"
+        return f"{span} ({inactive_days}d)"
+    if months >= 1:
+        span = f"{months}m {days}d" if days else f"{months}m"
+        return f"{span} ({inactive_days}d)"
+    return f"{inactive_days}d"
+
+
+def _repo_staleness_sort_key(rr: RepoActivityResult) -> tuple[int, int]:
+    # Missing/404 without timestamp sorts first (1, 0), else (0, inactive_days) descending
+    if rr.inactive_days is None:
+        return (1, 0)
+    return (0, rr.inactive_days)
+
+
 def _entry_location(item: EntryDriftResult) -> str:
     star = "⭐ " if item.entry.starred else ""
     cat = item.entry.category
@@ -194,7 +216,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
     if summary.repos_error:
         lines.append(f"| ⚠️ GitHub API Errors / Rate-Limited | {summary.repos_error} |")
 
-    # Section 1: Dead / Missing / Disabled GitHub Repositories (strictly separate from Archived!)
+    # Section 1: Dead / Missing / Disabled GitHub Repositories (longest dead/disabled first)
     lines.extend(["", "## 1. 💀 Dead GitHub Repositories (404, DMCA 451, or Disabled)", ""])
     dead_repos = _collect_entries_by_tiers(report.entries, {StalenessTier.MISSING})
     if not dead_repos:
@@ -204,9 +226,19 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
             lines.append(f"- {_entry_location(item)}")
             for rr in matched_repos:
                 web_str = _format_web_links_inline(item, rr)
-                lines.append(f"  - 💀 [{rr.full_name}]({rr.html_url}) — {rr.reason}{web_str}")
+                age_note = ""
+                if rr.inactive_days is not None:
+                    last_str = (
+                        f", last push `{rr.last_activity_at.strftime('%Y-%m-%d')}`"
+                        if rr.last_activity_at
+                        else ""
+                    )
+                    age_note = f" — **{format_duration_human(rr.inactive_days)}** without updates{last_str}"
+                lines.append(
+                    f"  - 💀 [{rr.full_name}]({rr.html_url}) — {rr.reason}{age_note}{web_str}"
+                )
 
-    # Section 2: Archived GitHub Repositories (with replacement-detected ones listed first!)
+    # Section 2: Archived GitHub Repositories (longest unupdated at the top)
     lines.extend(["", "## 2. 📦 Archived GitHub Repositories", ""])
     archived_repos = _collect_entries_by_tiers(report.entries, {StalenessTier.ARCHIVED})
     if not archived_repos:
@@ -230,8 +262,15 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                 for rr in matched_repos:
                     web_str = _format_web_links_inline(item, rr)
                     repl_str = _format_replacement_inline(rr)
+                    last_str = (
+                        rr.last_activity_at.strftime("%Y-%m-%d")
+                        if rr.last_activity_at
+                        else "unknown"
+                    )
                     lines.append(
-                        f"  - 📦 [{rr.full_name}]({rr.html_url}) — {rr.reason}{web_str}{repl_str}"
+                        f"  - 📦 [{rr.full_name}]({rr.html_url}) — archived, "
+                        f"**{format_duration_human(rr.inactive_days)}** since last push (`{last_str}`)"
+                        f"{web_str}{repl_str}"
                     )
             lines.append("")
 
@@ -241,9 +280,18 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                 lines.append(f"- {_entry_location(item)}")
                 for rr in matched_repos:
                     web_str = _format_web_links_inline(item, rr)
-                    lines.append(f"  - 📦 [{rr.full_name}]({rr.html_url}) — {rr.reason}{web_str}")
+                    last_str = (
+                        rr.last_activity_at.strftime("%Y-%m-%d")
+                        if rr.last_activity_at
+                        else "unknown"
+                    )
+                    lines.append(
+                        f"  - 📦 [{rr.full_name}]({rr.html_url}) — archived, "
+                        f"**{format_duration_human(rr.inactive_days)}** since last push (`{last_str}`)"
+                        f"{web_str}"
+                    )
 
-    # Sections 3–5: Stale GitHub Repositories by Inactivity Tier
+    # Sections 3–5: Stale GitHub Repositories by Inactivity Tier (longest unupdated at top)
     tier_sections = [
         (
             StalenessTier.TIER_3_CRITICAL,
@@ -275,8 +323,8 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                 )
                 web_str = _format_web_links_inline(item, rr)
                 lines.append(
-                    f"  - [{rr.full_name}]({rr.html_url}) — **{rr.inactive_days}d** inactive "
-                    f"(last activity `{last_str}`){web_str}"
+                    f"  - [{rr.full_name}]({rr.html_url}) — **{format_duration_human(rr.inactive_days)}** "
+                    f"without updates (last activity `{last_str}`){web_str}"
                 )
 
     # Section 6: Dead / Parked / TLS Error sites
@@ -340,9 +388,14 @@ def _collect_entries_by_tiers(
 ) -> list[tuple[EntryDriftResult, list[RepoActivityResult]]]:
     matched_list: list[tuple[EntryDriftResult, list[RepoActivityResult]]] = []
     for item in entries:
-        matched_repos = [r for r in item.repo_results if r.tier in tiers]
+        matched_repos = sorted(
+            (r for r in item.repo_results if r.tier in tiers),
+            key=_repo_staleness_sort_key,
+            reverse=True,
+        )
         if matched_repos:
             matched_list.append((item, matched_repos))
+    matched_list.sort(key=lambda pair: _repo_staleness_sort_key(pair[1][0]), reverse=True)
     return matched_list
 
 
