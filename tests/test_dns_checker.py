@@ -78,8 +78,14 @@ def test_dns_checker_detects_nxdomain_sinkhole_parked_and_skips_alive_or_onion()
     ]
     results = asyncio.run(checker.check_urls(urls))
 
-    # Strictly NEVER contacted any target website—only public DoH + passive archive/CT endpoints!
-    assert contacted_hosts <= {"cloudflare-dns.com", "dns.google", "web.archive.org", "crt.sh"}
+    # Strictly NEVER contacted any target website—only public DoH + passive archive/CT/RDAP endpoints!
+    assert contacted_hosts <= {
+        "cloudflare-dns.com",
+        "dns.google",
+        "web.archive.org",
+        "api.certspotter.com",
+        "rdap.org",
+    }
     assert not any("example.org" in h for h in contacted_hosts)
 
     assert "https://alive.example.org/app" not in results

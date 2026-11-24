@@ -294,19 +294,29 @@ async def test_dead_dns_enriches_last_active_from_wayback_and_crtsh_and_catches_
                 )
             return httpx.Response(200, json=[])
 
-        if "crt.sh" in u:
-            q = request.url.params.get("q", "")
+        if "api.certspotter.com" in u:
+            q = request.url.params.get("domain", "")
             if q == "expired-nx.example.org":
                 return httpx.Response(
                     200,
                     json=[
                         {
-                            "not_before": "2024-09-01T00:00:00",
-                            "not_after": "2024-11-30T00:00:00",
+                            "not_before": "2024-09-01T00:00:00Z",
+                            "not_after": "2024-11-30T00:00:00Z",
+                            "revoked": False,
                         }
                     ],
                 )
             return httpx.Response(200, json=[])
+
+        if "rdap.org/domain/" in u:
+            return httpx.Response(
+                200,
+                json={
+                    "status": ["redemptionPeriod"],
+                    "events": [{"eventAction": "expiration", "eventDate": "2024-10-01T00:00:00Z"}],
+                },
+            )
 
         return httpx.Response(404)
 
@@ -321,11 +331,12 @@ async def test_dead_dns_enriches_last_active_from_wayback_and_crtsh_and_catches_
     assert "192.168.1.1" in out["https://bogon-dead.example.org/"].reason
 
     nx = out["https://expired-nx.example.org/"]
-    # CT cert issued 2024-09-01 is newer than Wayback 2024-02-10, so last_seen_at == 2024-09-01!
-    assert nx.last_seen_at == datetime(2024, 9, 1, tzinfo=UTC)
-    assert nx.inactive_days == 815
-    assert "last active 2024-09-01" in nx.reason
+    # RDAP expiration 2024-10-01 is newer than CT 2024-09-01 & Wayback 2024-02-10!
+    assert nx.last_seen_at == datetime(2024, 10, 1, tzinfo=UTC)
+    assert nx.inactive_days == 785
+    assert "last active 2024-10-01" in nx.reason
     assert "last TLS cert expired 2024-11-30" in nx.reason
+    assert "redemptionPeriod" in nx.reason
 
 
 @pytest.mark.anyio

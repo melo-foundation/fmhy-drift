@@ -473,12 +473,18 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             for u, sr in reused_site_map.items()
             if not whitelist.is_url_whitelisted(u)
         }
-        if any(sr.is_unhealthy and sr.last_seen_at is None for sr in site_results_map.values()):
+        if any(
+            sr.is_unhealthy and (sr.last_seen_at is None or ("CT" not in sr.reason and "RDAP" not in sr.reason))
+            for sr in site_results_map.values()
+        ):
             print(
-                f"Enriching {len(site_results_map)} cached dead/parked DNS domains with Wayback + CT last-active dates...",
+                f"Enriching {len(site_results_map)} cached dead/parked DNS domains with Wayback + CertSpotter CT + RDAP dates...",
                 flush=True,
             )
-            site_results_map = await enrich_unhealthy_sites_last_active(site_results_map)
+            site_results_map = await enrich_unhealthy_sites_last_active(
+                site_results_map,
+                force_refresh=True,
+            )
     elif run_site_checks and proxy_url is not None:
         raw_urls = list(dict.fromkeys(u for e in entries for u in e.site_urls))
         urls_to_check = [u for u in raw_urls if not whitelist.is_url_whitelisted(u)]

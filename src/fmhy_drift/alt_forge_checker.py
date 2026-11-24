@@ -47,20 +47,26 @@ SRHT_SOURCE_REPO_RE = re.compile(
 
 
 def _parse_any_datetime(value: str | int | float | None) -> datetime | None:
-    """Parse ISO-8601, RFC-2822 (`pubDate`), `'YYYY-MM-DD HH:MM:SS'`, or Unix epoch timestamps."""
+    """Parse ISO-8601, RFC-2822 (`pubDate`), `'YYYY-MM-DD HH:MM:SS'`, or Unix epoch (s/ms) timestamps."""
     if value is None:
         return None
     if isinstance(value, (int, float)):
+        ts_num = float(value)
+        if ts_num > 1e11:
+            ts_num /= 1000.0
         try:
-            return datetime.fromtimestamp(float(value), tz=UTC)
+            return datetime.fromtimestamp(ts_num, tz=UTC)
         except (ValueError, OSError, OverflowError):
             return None
     text = str(value).strip()
     if not text:
         return None
     if text.isdigit():
+        ts_num = float(text)
+        if ts_num > 1e11:
+            ts_num /= 1000.0
         try:
-            return datetime.fromtimestamp(float(text), tz=UTC)
+            return datetime.fromtimestamp(ts_num, tz=UTC)
         except (ValueError, OSError, OverflowError):
             return None
 
@@ -102,7 +108,7 @@ def _build_gitlab_graphql_batch(batch: list[GitHubRef]) -> str:
     archived
     description
     lastActivityAt
-    repository {{ empty }}
+    repository {{ empty tree {{ lastCommit {{ sha committedDate }} }} }}
     releases(first: 1, sort: RELEASED_AT_DESC) {{ nodes {{ tagName releasedAt }} }}
   }}"""
         )
@@ -233,6 +239,20 @@ class AltForgeActivityChecker:
                 is_empty = bool(repo_info.get("empty"))
                 description = (node.get("description") or "").strip()
 
+                commit_dt: datetime | None = None
+                commit_oid: str | None = None
+                tree_info = repo_info.get("tree") if isinstance(repo_info.get("tree"), dict) else {}
+                last_c = (
+                    tree_info.get("lastCommit")
+                    if isinstance(tree_info.get("lastCommit"), dict)
+                    else {}
+                )
+                if isinstance(last_c.get("sha"), str):
+                    commit_oid = last_c["sha"]
+                commit_dt = _parse_any_datetime(last_c.get("committedDate"))
+                if commit_dt and commit_dt > self.now:
+                    commit_dt = None
+
                 release_dt: datetime | None = None
                 release_tag: str | None = None
                 rels = node.get("releases")
@@ -242,8 +262,12 @@ class AltForgeActivityChecker:
                         release_dt = _parse_any_datetime(rnodes[0].get("releasedAt"))
                         release_tag = rnodes[0].get("tagName")
 
-                act_dt = _parse_any_datetime(node.get("lastActivityAt"))
-                latest_ts = None if is_empty else _latest_activity([act_dt, release_dt])
+                fallback_act_dt = _parse_any_datetime(node.get("lastActivityAt"))
+                latest_ts = (
+                    None
+                    if is_empty
+                    else (_latest_activity([commit_dt, release_dt]) or fallback_act_dt)
+                )
 
                 repl_url: str | None = None
                 if is_archived:
@@ -278,6 +302,7 @@ class AltForgeActivityChecker:
                     res,
                     canonical_full_name=canon_full,
                     canonical_html_url=web_url,
+                    commit_oid=commit_oid,
                     replacement_url=repl_url,
                 )
 
@@ -861,6 +886,25 @@ class AltForgeActivityChecker:
                         commit_oid = sha_m.group(1)
                 if commit_dt is None:
                     commit_dt = _parse_any_datetime(chan.findtext("lastBuildDate"))
+            else:
+                # Atom feed (`hg.sr.ht` Mercurial log/rss.xml returns Atom `<feed><entry><updated>`)
+                atom_ns = "{http://www.w3.org/2005/Atom}"
+                desc = (root.findtext(f"{atom_ns}subtitle") or "").strip()
+                first_entry = root.find(f"{atom_ns}entry") or root.find("entry")
+                if first_entry is not None:
+                    commit_dt = _parse_any_datetime(
+                        first_entry.findtext(f"{atom_ns}updated")
+                        or first_entry.findtext(f"{atom_ns}published")
+                        or first_entry.findtext("updated")
+                    )
+                    eid = (
+                        first_entry.findtext(f"{atom_ns}id")
+                        or first_entry.findtext("id")
+                        or ""
+                    )
+                    sha_m = re.search(r"/rev/([0-9a-f]{7,40})\b", eid, re.IGNORECASE)
+                    if sha_m:
+                        commit_oid = sha_m.group(1)
         except ET.ParseError:
             pass
 
@@ -1117,12 +1161,21 @@ class AltForgeActivityChecker:
         act_dt: datetime | None = None
         act_resp = await client.get(
             f"https://sourceforge.net/rest/p/{slug}/activity",
-            params={"limit": "1"},
+            params={"limit": "10"},
         )
         if act_resp.status_code == 200 and isinstance(act_resp.json(), dict):
             tl = act_resp.json().get("timeline")
-            if isinstance(tl, list) and tl and isinstance(tl[0], dict):
-                act_dt = _parse_any_datetime(tl[0].get("published"))
+            if isinstance(tl, list):
+                for item in tl:
+                    if not isinstance(item, dict):
+                        continue
+                    verb = str(item.get("verb") or "").lower()
+                    # Only count code commits/pushes/releases, NOT user forum/ticket `posted` comments
+                    if verb in {"pushed", "committed", "released", "uploaded"}:
+                        cand_dt = _parse_any_datetime(item.get("published"))
+                        if cand_dt and cand_dt <= self.now:
+                            act_dt = cand_dt
+                            break
 
         last_upd = _parse_any_datetime(data.get("last_updated") or data.get("creation_date"))
         latest_ts = _latest_activity([release_dt, act_dt, last_upd])

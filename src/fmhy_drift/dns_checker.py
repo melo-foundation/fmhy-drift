@@ -355,28 +355,32 @@ async def enrich_unhealthy_sites_last_active(
     results: dict[str, SiteCheckResult],
     *,
     now: datetime | None = None,
+    force_refresh: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, SiteCheckResult]:
-    """Populate `last_seen_at` and `inactive_days` on dead/parked/TLS-broken sites via Wayback CDX & CT (`crt.sh`).
+    """Populate `last_seen_at` and `inactive_days` on dead/parked/TLS-broken sites via Wayback CDX, CertSpotter CT, & RDAP.
 
-    Never sends any network traffic to target websites; queries only `web.archive.org` and `crt.sh`.
+    Never sends any network traffic to target websites; queries only `web.archive.org`, `api.certspotter.com`, and `rdap.org`.
     """
     ref_now = now or datetime.now(UTC)
     target_urls = [
         u
         for u, sr in results.items()
-        if sr.is_unhealthy and sr.last_seen_at is None
+        if sr.is_unhealthy and (force_refresh or sr.last_seen_at is None)
     ]
     if not target_urls:
         return results
 
     host_to_urls: dict[str, list[str]] = {}
+    reg_domain_for_host: dict[str, str] = {}
     for u in target_urls:
         h = (urlsplit(u).hostname or "").lower().rstrip(".")
         if h.startswith("www."):
             h = h[4:]
         if h:
             host_to_urls.setdefault(h, []).append(u)
+            parts = h.split(".")
+            reg_domain_for_host[h] = ".".join(parts[-2:]) if len(parts) >= 2 else h
 
     kwargs: dict = {
         "timeout": httpx.Timeout(7.0),
@@ -388,11 +392,14 @@ async def enrich_unhealthy_sites_last_active(
         kwargs["transport"] = transport
 
     wb_sem = asyncio.Semaphore(6)
-    ct_sem = asyncio.Semaphore(4)
+    ct_sem = asyncio.Semaphore(5)
+    rdap_sem = asyncio.Semaphore(5)
     wb_dates: dict[str, datetime] = {}
     ct_info: dict[str, tuple[datetime | None, datetime | None]] = {}
+    rdap_expiry: dict[str, tuple[datetime | None, list[str]]] = {}
     wb_failures = 0
     ct_failures = 0
+    rdap_failures = 0
 
     async with httpx.AsyncClient(**kwargs) as client:
 
@@ -403,33 +410,39 @@ async def enrich_unhealthy_sites_last_active(
             async with wb_sem:
                 if wb_failures >= 5:
                     return
-                try:
-                    resp = await client.get(
-                        "https://web.archive.org/cdx/search/cdx",
-                        params={
-                            "url": u,
-                            "output": "json",
-                            "fl": "timestamp,statuscode",
-                            "filter": "statuscode:200",
-                            "limit": "-1",
-                        },
-                    )
-                    if resp.status_code in {429, 503}:
-                        wb_failures = 99
-                        return
-                    if resp.status_code != 200:
+                p = urlsplit(u)
+                candidates_u = [u]
+                if p.path and p.path not in {"", "/"} and p.scheme and p.netloc:
+                    candidates_u.append(f"{p.scheme}://{p.netloc}/")
+                for cand_u in candidates_u:
+                    try:
+                        resp = await client.get(
+                            "https://web.archive.org/cdx/search/cdx",
+                            params={
+                                "url": cand_u,
+                                "output": "json",
+                                "fl": "timestamp,statuscode",
+                                "filter": "statuscode:200",
+                                "limit": "-1",
+                            },
+                        )
+                        if resp.status_code in {429, 503}:
+                            wb_failures = 99
+                            return
+                        if resp.status_code != 200:
+                            wb_failures += 1
+                            continue
+                        wb_failures = 0
+                        rows = resp.json()
+                        if isinstance(rows, list) and len(rows) >= 2:
+                            ts = str(rows[-1][0])
+                            if len(ts) >= 8:
+                                wb_dates[u] = datetime.strptime(ts[:8], "%Y%m%d").replace(tzinfo=UTC)
+                                return
+                    except Exception:
                         wb_failures += 1
-                        return
-                    wb_failures = 0
-                    rows = resp.json()
-                    if isinstance(rows, list) and len(rows) >= 2:
-                        ts = str(rows[-1][0])
-                        if len(ts) >= 8:
-                            wb_dates[u] = datetime.strptime(ts[:8], "%Y%m%d").replace(tzinfo=UTC)
-                except Exception:
-                    wb_failures += 1
 
-        async def _query_crtsh(host: str) -> None:
+        async def _query_certspotter(host: str) -> None:
             nonlocal ct_failures
             if ct_failures >= 4 or host.endswith(NON_PUBLIC_DNS_TLDS):
                 return
@@ -438,8 +451,8 @@ async def enrich_unhealthy_sites_last_active(
                     return
                 try:
                     resp = await client.get(
-                        "https://crt.sh/",
-                        params={"q": host, "output": "json"},
+                        "https://api.certspotter.com/v1/issuances",
+                        params={"domain": host},
                     )
                     if resp.status_code in {429, 502, 503, 504}:
                         ct_failures += 1
@@ -452,8 +465,8 @@ async def enrich_unhealthy_sites_last_active(
                         return
                     latest_issued: datetime | None = None
                     latest_expiry: datetime | None = None
-                    for row in entries[:60]:
-                        if not isinstance(row, dict):
+                    for row in entries[-40:]:
+                        if not isinstance(row, dict) or row.get("revoked"):
                             continue
                         nb = _parse_ct_iso(row.get("not_before"))
                         na = _parse_ct_iso(row.get("not_after"))
@@ -466,13 +479,43 @@ async def enrich_unhealthy_sites_last_active(
                 except Exception:
                     ct_failures += 1
 
+        async def _query_rdap(reg_dom: str) -> None:
+            nonlocal rdap_failures
+            if rdap_failures >= 5 or reg_dom.endswith(NON_PUBLIC_DNS_TLDS):
+                return
+            async with rdap_sem:
+                if rdap_failures >= 5:
+                    return
+                try:
+                    resp = await client.get(f"https://rdap.org/domain/{reg_dom}")
+                    if resp.status_code in {429, 502, 503, 504}:
+                        rdap_failures += 1
+                        return
+                    if resp.status_code != 200:
+                        return
+                    rdap_failures = 0
+                    body = resp.json()
+                    if not isinstance(body, dict):
+                        return
+                    statuses = [str(s) for s in (body.get("status") or []) if isinstance(s, str)]
+                    exp_dt: datetime | None = None
+                    for ev in body.get("events") or []:
+                        if isinstance(ev, dict) and str(ev.get("eventAction") or "").lower() == "expiration":
+                            exp_dt = _parse_ct_iso(ev.get("eventDate"))
+                    if exp_dt is not None or statuses:
+                        rdap_expiry[reg_dom] = (exp_dt, statuses)
+                except Exception:
+                    rdap_failures += 1
+
+        unique_reg_domains = sorted(set(reg_domain_for_host.values()))
         try:
             await asyncio.wait_for(
                 asyncio.gather(
                     *(_query_wayback(u) for u in target_urls),
-                    *(_query_crtsh(h) for h in host_to_urls),
+                    *(_query_certspotter(h) for h in host_to_urls),
+                    *(_query_rdap(rd) for rd in unique_reg_domains),
                 ),
-                timeout=35.0,
+                timeout=30.0,
             )
         except TimeoutError:
             pass
@@ -483,11 +526,16 @@ async def enrich_unhealthy_sites_last_active(
         h = (urlsplit(u).hostname or "").lower().rstrip(".")
         if h.startswith("www."):
             h = h[4:]
+        reg_dom = reg_domain_for_host.get(h, h)
         wb_dt = wb_dates.get(u)
         ct_issued, ct_expiry = ct_info.get(h, (None, None))
+        reg_exp_dt, reg_statuses = rdap_expiry.get(reg_dom, (None, []))
 
         candidates = [d for d in (wb_dt, ct_issued) if d is not None]
-        if not candidates and ct_expiry is None:
+        if reg_exp_dt is not None and reg_exp_dt <= ref_now:
+            candidates.append(reg_exp_dt)
+
+        if not candidates and ct_expiry is None and reg_exp_dt is None:
             continue
 
         best_dt = max(candidates) if candidates else None
@@ -499,18 +547,29 @@ async def enrich_unhealthy_sites_last_active(
 
         notes: list[str] = []
         if best_dt is not None:
-            src_tag = (
-                "Wayback 200 OK"
-                if (wb_dt and best_dt == wb_dt)
-                else "CT DNS cert issued"
-            )
+            if reg_exp_dt is not None and best_dt == reg_exp_dt:
+                src_tag = "RDAP domain expiration"
+            elif wb_dt is not None and best_dt == wb_dt:
+                src_tag = "Wayback 200 OK"
+            else:
+                src_tag = "CT TLS cert issued"
             notes.append(f"last active {best_dt.strftime('%Y-%m-%d')} ({src_tag})")
+
         if ct_expiry is not None and ct_expiry < ref_now:
             notes.append(f"last TLS cert expired {ct_expiry.strftime('%Y-%m-%d')}")
 
-        new_reason = sr.reason
-        if notes and "last active " not in new_reason:
-            new_reason = f"{new_reason} — {'; '.join(notes)}"
+        hold_flags = [
+            s
+            for s in reg_statuses
+            if any(k in s.lower() for k in ("redemption", "pending delete", "hold"))
+        ]
+        if hold_flags:
+            notes.append(f"RDAP: {', '.join(hold_flags[:2])}")
+        elif reg_exp_dt is not None and reg_exp_dt < ref_now and best_dt != reg_exp_dt:
+            notes.append(f"domain expired {reg_exp_dt.strftime('%Y-%m-%d')}")
+
+        base_reason = sr.reason.split(" — last active ", 1)[0]
+        new_reason = f"{base_reason} — {'; '.join(notes)}" if notes else base_reason
 
         updated[u] = replace(
             sr,
