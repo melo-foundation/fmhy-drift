@@ -627,7 +627,219 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       opacity: 0.45;
       cursor: default;
     }
+    .tb-muted-note { color: #556880; }
+    .tb-action-status { margin-top: 5px; font-size: 11px; color: #224477; }
+    .tb-repl-box {
+      background: #e9f7ed;
+      border: 1px solid #8fd19e;
+      padding: 4px 6px;
+      margin-top: 6px;
+    }
+    .tb-repl-title { color: #0b6b24; }
+
+    /* Classic Dark Thunderbird XUL Theme (default) */
+    html.dark, html.dark body {
+      background: #12161c;
+      color: #e2e9f2;
+      color-scheme: dark;
+    }
+    html.dark a { color: #6cb4ff; }
+    html.dark a:hover { color: #96cbff; }
+    html.dark .tb-window {
+      border-color: #344154;
+      background: #1b212a;
+    }
+    html.dark .tb-titlebar {
+      background: linear-gradient(180deg, #2c3646 0%, #202835 48%, #19202b 52%, #222b39 100%);
+      border-bottom-color: #354357;
+      color: #e2ebf7;
+      text-shadow: 0 1px 0 rgba(0,0,0,0.65);
+    }
+    html.dark .tb-win-btn {
+      border-color: #485a73;
+      background: linear-gradient(180deg, #313d4f 0%, #1f2734 100%);
+      color: #d4e0f0;
+    }
+    html.dark .tb-menubar {
+      background: linear-gradient(180deg, #252e3c 0%, #1d2430 100%);
+      border-bottom-color: #323f52;
+    }
+    html.dark .tb-menu-item { color: #dce6f2; }
+    html.dark .tb-menu-item:hover {
+      background: linear-gradient(180deg, #324055 0%, #253244 100%);
+      border-color: #4e6788;
+    }
+    html.dark .tb-toolbar {
+      background: linear-gradient(180deg, #2a3342 0%, #212936 50%, #1b222d 51%, #202835 100%);
+      border-bottom-color: #323f52;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+    }
+    html.dark .tb-tool-btn { color: #dce6f2; }
+    html.dark .tb-tool-btn:hover {
+      background: linear-gradient(180deg, rgba(95,135,190,0.25) 0%, rgba(55,85,125,0.28) 100%);
+      border-color: #4e698e;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+    }
+    html.dark .tb-tool-btn:active {
+      background: #171e28;
+      border-color: #3f5778;
+    }
+    html.dark .tb-sep {
+      border-left-color: #12171f;
+      border-right-color: #364357;
+    }
+    html.dark .tb-filter-group { color: #d4dfee; }
+    html.dark .tb-source-select,
+    html.dark .tb-search-wrap,
+    html.dark .tb-num-input,
+    html.dark .tb-input,
+    html.dark .tb-textarea {
+      background: #131820;
+      border-color: #3e5069;
+      color: #e6edf5;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.35);
+    }
+    html.dark .tb-search-wrap input { color: #e6edf5; }
+    html.dark .tb-threshbar {
+      background: linear-gradient(180deg, #222a37 0%, #1b222d 100%);
+      border-bottom-color: #323f52;
+      box-shadow: none;
+      color: #cbd6e6;
+    }
+    html.dark .tb-thresh-title { color: #9ec3f0; }
+    html.dark .tb-thresh-sep { color: #495a73; }
+    html.dark .tb-thresh-hint { color: #90a3bd; }
+    html.dark .tb-workspace { background: #12161d; }
+    html.dark .tb-folder-pane,
+    html.dark .tb-thread-pane,
+    html.dark .tb-preview-pane {
+      background: #1b212a;
+      border-color: #344154;
+      color: #e2e9f2;
+    }
+    html.dark .tb-pane-header {
+      background: linear-gradient(180deg, #293241 0%, #1e2632 100%);
+      border-bottom-color: #344154;
+      color: #d6e1f0;
+    }
+    html.dark .tb-tree-root,
+    html.dark .tb-folder-item { color: #dce6f2; }
+    html.dark .tb-folder-item:hover { background: #242e3d; }
+    html.dark .tb-folder-item.active {
+      background: linear-gradient(180deg, #274c7d 0%, #1e3c63 100%);
+      border-color: #4978b5;
+      color: #ffffff;
+    }
+    html.dark .tb-cat-divider {
+      border-top-color: #2b3545;
+      color: #9ec3f0;
+    }
+    html.dark table.tb-table thead th {
+      background: linear-gradient(180deg, #2a3342 0%, #202836 60%, #1b222e 100%);
+      border-bottom-color: #38475c;
+      border-right-color: #2f3b4d;
+      color: #d8e2f0;
+    }
+    html.dark table.tb-table thead th:hover {
+      background: linear-gradient(180deg, #323e52 0%, #263142 100%);
+    }
+    html.dark table.tb-table tbody tr {
+      border-bottom-color: #232b37;
+    }
+    html.dark table.tb-table tbody tr:nth-child(even) {
+      background: #171c24;
+    }
+    html.dark table.tb-table tbody tr:hover {
+      background: #232e3f;
+    }
+    html.dark table.tb-table tbody tr.ticked:not(.selected) {
+      background: #2d2716;
+    }
+    html.dark table.tb-table tbody tr.selected {
+      background: #24559c !important;
+      color: #ffffff !important;
+    }
+    html.dark .src-pill {
+      background: #133620;
+      border-color: #2ea043;
+      color: #7ee787;
+    }
+    html.dark .src-pill.heur {
+      background: #38290c;
+      border-color: #bb8009;
+      color: #f2cc60;
+    }
+    html.dark .star-on { color: #f5b427; }
+    html.dark .star-off { color: #4d5d73; }
+    html.dark .muted-cell, html.dark .tb-muted-note { color: #8fa0b8; }
+    html.dark .row-link { color: #6cb4ff; }
+    html.dark .row-link:hover { color: #9acdff; }
+    html.dark .repl-tag, html.dark .tb-repl-title { color: #56d364; }
+    html.dark .tb-msg-header {
+      background: linear-gradient(180deg, #242d3b 0%, #1c2430 100%);
+      border-bottom-color: #344154;
+    }
+    html.dark .tb-hdr-label { color: #90a3bd; }
+    html.dark .tb-card-heading {
+      color: #f0f5fc;
+      border-bottom-color: #495b73;
+    }
+    html.dark .tb-blue-bar {
+      background: #255896;
+      color: #ffffff;
+    }
+    html.dark .tb-src-banner-ok {
+      background: #12301d;
+      border-color: #2ea043;
+      color: #7ee787;
+    }
+    html.dark .tb-src-banner-warn {
+      background: #36280d;
+      border-color: #bb8009;
+      color: #f2cc60;
+    }
+    html.dark .tb-repl-box {
+      background: #122e1c;
+      border-color: #2ea043;
+      color: #d8f5df;
+    }
+    html.dark .tb-raw-line-box {
+      background: #12161d;
+      border-color: #344154;
+      color: #cbd6e6;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.4);
+    }
+    html.dark .tb-classic-btn {
+      border-color: #475973;
+      background: linear-gradient(180deg, #2d3747 0%, #212936 100%);
+      color: #e2e9f2;
+    }
+    html.dark .tb-classic-btn:hover {
+      background: linear-gradient(180deg, #374458 0%, #283344 100%);
+      border-color: #6382ab;
+    }
+    html.dark .tb-classic-btn.primary { border-color: #4f84c4; }
+    html.dark .tb-action-status { color: #79b8ff; }
+    html.dark .tb-statusbar {
+      background: linear-gradient(180deg, #232b38 0%, #1a212b 100%);
+      border-top-color: #344154;
+      color: #c8d4e3;
+    }
+    html.dark .tb-status-panel { border-left-color: #344154; }
+    html.dark .tb-pager-btns button {
+      border-color: #465770;
+      background: #252f3f;
+      color: #dce6f2;
+    }
   </style>
+  <script>
+    (function() {
+      const saved = localStorage.getItem("fmhy_theme");
+      if (saved !== "light") {
+        document.documentElement.classList.add("dark");
+      }
+    })();
+  </script>
 </head>
 <body>
   <div class="tb-window">
@@ -655,9 +867,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       <span class="tb-menu-item" id="menu-clear-ticks"><u>C</u>lear Ticks</span>
       <span class="tb-menu-item" id="menu-outbox"><u>M</u>essage Outbox</span>
       <span class="tb-menu-item" id="menu-copy-wl"><u>T</u>ools (Edit whitelist.json)</span>
+      <span class="tb-menu-item" id="menu-theme-toggle"><u>V</u>iew (☀️ Light / 🌙 Dark)</span>
       <a class="tb-menu-item" id="menu-help-gh" href="https://github.com/melo-foundation/fmhy-drift" target="_blank" rel="noopener"><u>H</u>elp (GitHub)</a>
       <div class="tb-menubar-spacer"></div>
-      <span style="color:#556880;font-size:10.5px;padding-right:6px;">Keys: ↑/↓ Navigate · Space Tick · J Whitelist</span>
+      <span class="tb-muted-note" style="font-size:10.5px;padding-right:6px;">Keys: ↑/↓ Navigate · Space Tick · J Whitelist</span>
     </div>
 
     <!-- Big-Icon XUL Toolbar -->
@@ -794,7 +1007,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
                 <span id="card-tier-pill"></span>
               </div>
               <div id="card-details">
-                <div class="tb-detail-row" style="color:#556880;">Click any row in the list above (or press ↑/↓) to inspect its GitHub repository, FMHY link provenance, literal FMHY markdown line, attached website / GitHub Pages link, and detected replacement link.</div>
+                <div class="tb-detail-row tb-muted-note">Click any row in the list above (or press ↑/↓) to inspect its GitHub repository, FMHY link provenance, literal FMHY markdown line, attached website / GitHub Pages link, and detected replacement link.</div>
               </div>
 
               <div class="tb-blue-bar" style="margin-top:10px;">
@@ -826,7 +1039,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
                 <button type="button" class="tb-classic-btn primary" id="save-gh-btn">Commit whitelist.json</button>
                 <button type="button" class="tb-classic-btn" id="copy-wl-btn">Copy &amp; Edit on GitHub</button>
               </div>
-              <div id="action-status" style="margin-top:5px;font-size:11px;color:#224477;"></div>
+              <div id="action-status" class="tb-action-status"></div>
             </div>
           </div>
         </section>
@@ -1599,7 +1812,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         document.getElementById("card-heading").textContent = "No Entry Selected";
         document.getElementById("card-tier-pill").textContent = "";
         document.getElementById("card-details").innerHTML =
-          `<div class="tb-detail-row" style="color:#556880;">Select an entry from the folder list above (or clear active search/filters).</div>`;
+          `<div class="tb-detail-row tb-muted-note">Select an entry from the folder list above (or clear active search/filters).</div>`;
         noteInput.value = "";
         noteInput.disabled = true;
         return;
@@ -1666,13 +1879,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         }).join("<br/>");
         detailsHtml += `<div class="tb-detail-row"><strong>Attached Web / Pages:</strong><br/>${wlinks}</div>`;
       } else {
-        detailsHtml += `<div class="tb-detail-row"><strong>Attached Web / Pages:</strong> <span style="color:#666;">None linked</span></div>`;
+        detailsHtml += `<div class="tb-detail-row"><strong>Attached Web / Pages:</strong> <span class="tb-muted-note">None linked</span></div>`;
       }
 
       if (it.replacementUrl) {
         const st = it.replacementStatus ? ` (${escapeHtml(it.replacementStatus)})` : "";
-        detailsHtml += `<div class="tb-detail-row" style="background:#e9f7ed;border:1px solid #8fd19e;padding:4px 6px;margin-top:6px;">
-          <strong style="color:#0b6b24;">↪ Detected Replacement Repo:</strong>
+        detailsHtml += `<div class="tb-detail-row tb-repl-box">
+          <strong class="tb-repl-title">↪ Detected Replacement Repo:</strong>
           <strong>${renderSafeLink(it.replacementUrl, it.replacementUrl, "", false)}</strong>${st}
         </div>`;
       }
@@ -1683,7 +1896,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           <strong>Literal FMHY Listing Line:</strong>
           ${hasRawLine ? `<button type="button" class="tb-classic-btn" id="btn-copy-raw-line" style="padding:1px 6px;font-size:10.5px;">Copy Line</button>` : ""}
         </div>
-        <div class="tb-raw-line-box">${hasRawLine ? escapeHtml(it.rawLine) : `<span style="color:#667788;font-style:italic;">(Literal raw_line not present in this report JSON — re-run fmhy-drift to include)</span>`}</div>
+        <div class="tb-raw-line-box">${hasRawLine ? escapeHtml(it.rawLine) : `<span class="tb-muted-note" style="font-style:italic;">(Literal raw_line not present in this report JSON — re-run fmhy-drift to include)</span>`}</div>
       `;
 
       document.getElementById("card-details").innerHTML = detailsHtml;
@@ -1938,6 +2151,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       state.activeFolder = "outbox";
       state.page = 0;
       renderAll();
+    };
+    document.getElementById("menu-theme-toggle").onclick = () => {
+      const isDark = document.documentElement.classList.toggle("dark");
+      localStorage.setItem("fmhy_theme", isDark ? "dark" : "light");
     };
 
     async function copyReport() {

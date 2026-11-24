@@ -65,16 +65,42 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if push only modified UI or workflow (fast Pages redeploy)
+        id: check_ui_only
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            CHANGED=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" 2>/dev/null || echo "all")
+            if [ -n "${CHANGED}" ] && ! echo "${CHANGED}" | grep -qvE '^(src/fmhy_drift/triage_ui\.py|\.github/workflows/.*|README\.md|whitelist\.json)$'; then
+              if curl -fsSL "https://melo-foundation.github.io/fmhy-drift/fmhy-drift-report.json" -o /tmp/prev-report.json && \
+                 curl -fsSL "https://melo-foundation.github.io/fmhy-drift/fmhy-drift-report.md" -o /tmp/prev-report.md; then
+                mkdir -p reports
+                mv /tmp/prev-report.json reports/fmhy-drift-report.json
+                mv /tmp/prev-report.md reports/fmhy-drift-report.md
+                cp whitelist.json reports/whitelist.json
+                PYTHONPATH=src python3 -c "from pathlib import Path; from fmhy_drift.triage_ui import TRIAGE_HTML; Path('reports/index.html').write_text(TRIAGE_HTML, encoding='utf-8')"
+                echo "Fast UI-only redeploy: reusing existing report data from GitHub Pages."
+                echo "ui_only=true" >> "${GITHUB_OUTPUT}"
+                exit 0
+              fi
+            fi
+          fi
+          echo "ui_only=false" >> "${GITHUB_OUTPUT}"
 
       - name: Install uv and Python 3.12
+        if: steps.check_ui_only.outputs.ui_only != 'true'
         uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
 
       - name: Install project dependencies
+        if: steps.check_ui_only.outputs.ui_only != 'true'
         run: uv sync --frozen || uv sync
 
       - name: Run FMHY drift and GitHub staleness check
+        if: steps.check_ui_only.outputs.ui_only != 'true'
         env:
           PROXY_URL: ${{ secrets.PROXY_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
