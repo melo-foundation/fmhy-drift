@@ -143,6 +143,9 @@ jobs:
           if [ "${{ inputs.starred_only }}" = "true" ]; then
             EXTRA_ARGS+=(--starred-only)
           fi
+          if curl -fsSL "https://melo-foundation.github.io/fmhy-drift/fmhy-drift-report.json" -o /tmp/published-report.json; then
+            EXTRA_ARGS+=(--previous-report /tmp/published-report.json)
+          fi
           COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null || echo "")
           if [ "${{ inputs.only_alt_forges }}" = "true" ] || { [ "${{ github.event_name }}" = "push" ] && ! echo "${COMMIT_MSG}" | grep -qi '\[full-scan\]'; }; then
             if curl -fsSL "https://melo-foundation.github.io/fmhy-drift/fmhy-drift-report.json" -o /tmp/prev-report.json; then

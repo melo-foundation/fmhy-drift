@@ -6,6 +6,7 @@ from pathlib import Path
 
 FOLDER_ROUTE_SLUGS: tuple[str, ...] = (
     "inbox",
+    "new",
     "dead-repos",
     "severe-vulns",
     "moved",
@@ -717,6 +718,21 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     html.dark .sev-pill.sev-notice { background: #33300a; border-color: #bfa21c; color: #e6d36a; }
     html.dark .sev-pill.sev-info { background: #102338; border-color: #4a7fbf; color: #9cc3ef; }
     tr.selected .sev-pill { background: #ffffff !important; }
+    .chg-pill {
+      display: inline-block;
+      padding: 0 4px;
+      border-radius: 2px;
+      font-size: 9.5px;
+      font-weight: 700;
+      margin-right: 4px;
+      border: 1px solid #2d7d46;
+      background: #e3f6e8;
+      color: #1d6b35;
+    }
+    .chg-pill.chg-changed { border-color: #6a55b5; background: #eeeafb; color: #4b3a96; }
+    html.dark .chg-pill { background: #12301c; border-color: #3fb950; color: #7ee2a0; }
+    html.dark .chg-pill.chg-changed { background: #231c3d; border-color: #8e7bdc; color: #c4b8f5; }
+    tr.selected .chg-pill { background: #ffffff !important; }
     .tb-signal-table {
       width: 100%;
       border-collapse: collapse;
@@ -1208,6 +1224,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     const FOLDER_SLUGS = {
       inbox_all: "inbox",
+      new_items: "new",
       missing: "dead-repos",
       severe_vulns: "severe-vulns",
       archived_moved: "moved",
@@ -1228,6 +1245,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     const SLUG_TO_FOLDER = {
       inbox: "inbox_all",
       inbox_all: "inbox_all",
+      new: "new_items",
+      new_items: "new_items",
       "dead-repos": "missing",
       missing: "missing",
       "severe-vulns": "severe_vulns",
@@ -1442,6 +1461,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     function getFolders() {
       return [
         { id: "inbox_all", label: "Inbox (All Flagged)", icon: "inbox", tip: "All non-whitelisted, non-done dead, archived, dead-site, and inactive entries" },
+        { id: "new_items", label: "New", icon: "inbox" },
         { id: "missing", label: "Dead / 404 Repos", icon: "inbox", tip: "404, DMCA 451, or disabled repositories across GitHub, GitLab, Codeberg, sr.ht, etc." },
         { id: "severe_vulns", label: "Severe Vulns (Crit/High)", icon: "vuln", tip: "Stale or archived repositories with HIGH or CRITICAL vulnerabilities (OSV.dev)" },
         { id: "archived_moved", label: "Moved / New Repo", icon: "moved", tip: "Dead or archived repositories with a detected replacement or author's similar active repo" },
@@ -1813,6 +1833,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             replacementStatus: rr.replacement_status || null,
             vulns: Array.isArray(rr.vulns) ? rr.vulns : [],
             webUrls: mergedWeb,
+            change: rr.change || null,
+            changeFrom: rr.change_from || null,
           });
         }
 
@@ -1855,6 +1877,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             replacementStatus: null,
             webUrls: [sr.url],
             signals: sigs,
+            change: sr.change || null,
+            changeFrom: sr.change_from || null,
           });
         }
       }
@@ -1873,6 +1897,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       }
       if (folderId === "outbox") {
         return state.items.filter(it => state.selectedIds.has(it.id));
+      }
+      if (folderId === "new_items") {
+        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && Boolean(it.change));
       }
       if (folderId === "inbox_all") {
         return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && effectiveTier(it) !== "active");
@@ -2166,6 +2193,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           sevBadgeHtml = severityPill(top.severity);
         }
 
+        const changeBadgeHtml = it.change
+          ? `<span class="chg-pill chg-${it.change === "new" ? "new" : "changed"}">${it.change === "new" ? "NEW" : "CHG"}</span>`
+          : "";
+
         let vulnBadgeHtml = "";
         if (it.vulns && it.vulns.length > 0) {
           const critCnt = it.vulns.filter(v => v.severity === "CRITICAL").length;
@@ -2177,7 +2208,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           <td class="col-cb"><input type="checkbox" class="row-cb" ${isTicked ? "checked" : ""} /></td>
           <td class="col-star">${it.starred ? '<span class="star-on">★</span>' : '<span class="star-off">•</span>'}</td>
           <td class="col-clip">${hasClip ? "📎" : ""}</td>
-          <td class="col-subject" title="${escapeHtml(it.title)}">${sevBadgeHtml}${escapeHtml(it.title)}${vulnBadgeHtml}</td>
+          <td class="col-subject" title="${escapeHtml(it.title)}">${changeBadgeHtml}${sevBadgeHtml}${escapeHtml(it.title)}${vulnBadgeHtml}</td>
           <td class="col-repo" title="${escapeHtml(it.fullName || it.siteUrl || "")}">${repoCellHtml}</td>
           <td class="col-src">${srcCellHtml}</td>
           <td class="col-web">${formatWebCell(it)}</td>
@@ -2300,6 +2331,11 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           const pushDateTxt = it.lastActivityAt ? ` (last push ${escapeHtml(it.lastActivityAt)})` : "";
           detailsHtml += `<div class="tb-detail-row"><strong>Last Push / Release:</strong> <strong>${escapeHtml(ageTxt)} ago</strong>${pushDateTxt}</div>`;
         }
+      }
+      if (it.change) {
+        const chgTxt = it.change === "new" ? "New" : "Changed";
+        const fromTxt = it.changeFrom ? ` · was ${it.changeFrom}` : "";
+        detailsHtml += `<div class="tb-detail-row"><strong>This Run:</strong> ${escapeHtml(chgTxt + fromTxt)}</div>`;
       }
       detailsHtml += `<div class="tb-detail-row"><strong>Status Detail:</strong> ${escapeHtml(it.reason || "Empty / unknown age")}</div>`;
 

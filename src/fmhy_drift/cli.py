@@ -39,6 +39,7 @@ from fmhy_drift.proxy_guard import (
     validate_proxy_url,
     verify_proxy_egress,
 )
+from fmhy_drift.run_diff import annotate_changes
 from fmhy_drift.reporter import (
     github_pages_url_from_env,
     render_json_report,
@@ -109,6 +110,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Check stale and archived repositories across GitHub/GitLab/Codeberg/Bitbucket for HIGH/CRITICAL vulnerabilities via OSV.dev (default: enabled).",
+    )
+    parser.add_argument(
+        "--previous-report",
+        type=Path,
+        default=None,
+        help="Previously published fmhy-drift-report.json; rows that are new or changed since it are marked for the New folder.",
     )
     parser.add_argument(
         "--reuse-report",
@@ -780,6 +787,20 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     pages_url = github_pages_url_from_env()
     markdown_text = render_markdown_report(report, pages_url=pages_url)
     json_text = render_json_report(report)
+    if args.previous_report is not None and args.previous_report.is_file():
+        try:
+            prev_payload = json.loads(args.previous_report.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prev_payload = None
+        payload = annotate_changes(json.loads(json_text), prev_payload)
+        json_text = json.dumps(payload, indent=2, ensure_ascii=False)
+        if payload.get("changes"):
+            ch = payload["changes"]
+            print(
+                f"Changes since {ch['previous_generated_at']}: {ch['new']} new, "
+                f"{ch['changed']} changed, {ch['resolved']} resolved",
+                flush=True,
+            )
 
     args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
     args.markdown_out.write_text(markdown_text, encoding="utf-8")
