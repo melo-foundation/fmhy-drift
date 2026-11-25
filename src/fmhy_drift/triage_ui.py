@@ -7,6 +7,7 @@ from pathlib import Path
 FOLDER_ROUTE_SLUGS: tuple[str, ...] = (
     "inbox",
     "new",
+    "todo",
     "dead-repos",
     "severe-vulns",
     "moved",
@@ -1225,6 +1226,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     const FOLDER_SLUGS = {
       inbox_all: "inbox",
       new_items: "new",
+      todo: "todo",
       missing: "dead-repos",
       severe_vulns: "severe-vulns",
       archived_moved: "moved",
@@ -1247,6 +1249,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       inbox_all: "inbox_all",
       new: "new_items",
       new_items: "new_items",
+      todo: "todo",
       "dead-repos": "missing",
       missing: "missing",
       "severe-vulns": "severe_vulns",
@@ -1463,6 +1466,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       return [
         { id: "inbox_all", label: "Inbox (All Flagged)", icon: "inbox", tip: "All non-whitelisted, non-done dead, archived, dead-site, and inactive entries" },
         { id: "new_items", label: "New", icon: "inbox" },
+        { id: "todo", label: "To-do", icon: "done" },
         { id: "missing", label: "Dead / 404 Repos", icon: "inbox", tip: "404, DMCA 451, or disabled repositories across GitHub, GitLab, Codeberg, sr.ht, etc." },
         { id: "severe_vulns", label: "Severe Vulns (Crit/High)", icon: "vuln", tip: "Stale or archived repositories with HIGH or CRITICAL vulnerabilities (OSV.dev)" },
         { id: "archived_moved", label: "Moved / New Repo", icon: "moved", tip: "Dead or archived repositories with a detected replacement or author's similar active repo" },
@@ -1880,6 +1884,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             signals: sigs,
             change: sr.change || null,
             changeFrom: sr.change_from || null,
+            aliveSiblings: Array.isArray(sr.alive_siblings) ? sr.alive_siblings : [],
+            linkCleanup: Boolean(sr.link_cleanup),
           });
         }
       }
@@ -1902,6 +1908,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       if (folderId === "new_items") {
         return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && Boolean(it.change));
       }
+      if (folderId === "todo") {
+        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && it.kind === "site" && it.linkCleanup);
+      }
       if (folderId === "inbox_all") {
         return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && effectiveTier(it) !== "active");
       }
@@ -1910,6 +1919,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         const tier = effectiveTier(it);
         if (folderId === "severe_vulns") return it.kind === "repo" && tier !== "active" && it.vulns && it.vulns.length > 0;
         if (folderId === "archived_moved") return it.kind === "repo" && (tier === "archived" || tier === "missing") && Boolean(it.replacementUrl);
+        if (it.kind === "site" && it.linkCleanup) return false;
         if (folderId === "dead_sites") return it.kind === "site" && DEAD_SITE_STATUSES.includes(it.siteStatus);
         if (SIGNAL_FOLDER_KINDS[folderId]) return it.kind === "site" && signalsInFolder(it, folderId).length > 0;
         return it.kind === "repo" && tier === folderId;
@@ -2338,6 +2348,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         const fromTxt = it.changeFrom ? ` · was ${it.changeFrom}` : "";
         detailsHtml += `<div class="tb-detail-row"><strong>This Run:</strong> ${escapeHtml(chgTxt + fromTxt)}</div>`;
       }
+      if (it.kind === "site" && it.aliveSiblings && it.aliveSiblings.length) {
+        const upLinks = it.aliveSiblings.map(u => renderSafeLink(u, u, "", false)).join("<br/>");
+        detailsHtml += `<div class="tb-detail-row"><strong>Still Up:</strong><br/>${upLinks}</div>`;
+      }
       detailsHtml += `<div class="tb-detail-row"><strong>Status Detail:</strong> ${escapeHtml(it.reason || "Empty / unknown age")}</div>`;
 
       if (it.webUrls && it.webUrls.length > 0) {
@@ -2424,6 +2438,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       if (selected.length === 0) return "";
 
       const groups = [
+        { title: "To-do: Remove Dead Links", filter: it => it.kind === "site" && it.linkCleanup, todo: true },
         { title: "Dead / 404 / DMCA Repositories", filter: it => it.kind === "repo" && effectiveTier(it) === "missing" },
         { title: "Archived Repos (New Repo Found)", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && it.replacementUrl },
         { title: "Archived Repositories", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && !it.replacementUrl },
@@ -2482,6 +2497,15 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
                 : (it.reason || "Empty / unknown age");
             }
             lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.htmlUrl}> [${srcTag}] (${detail})${webPart}${replPart}${vulnPart}${noteSuffix}`);
+          } else if (g.todo) {
+            const why = (it.signals && it.signals.length)
+              ? it.signals.slice().sort(compareSignals).map(sg => {
+                  const day = sg.observed_at ? `, ${String(sg.observed_at).slice(0, 10)}` : "";
+                  return `${signalKindLabel(sg.kind)}: ${sg.detail}${day}`;
+                }).join("; ")
+              : (it.reason || "dead");
+            const up = it.aliveSiblings.slice(0, 4).map(u => `<${u}>`).join(", ");
+            lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — remove <${it.siteUrl}> (${why}) | Still up: ${up}${noteSuffix}`);
           } else if (g.folder) {
             const sigs = signalsInFolder(it, g.folder).slice().sort(compareSignals);
             const sigTxt = sigs.map(sg => {

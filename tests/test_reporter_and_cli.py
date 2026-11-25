@@ -431,3 +431,42 @@ def test_cli_3dash_deduplication_and_canonical_whitelist_roundtrip(
     # summarize_report also deduplicates by canonical full_name.lower()
     assert data["summary"]["repos_tier2_warning"] == 1
     assert data["summary"]["repos_tier1_notice"] == 1
+
+
+def test_alive_siblings_mark_dead_link_on_live_line_as_cleanup() -> None:
+    from fmhy_drift.cli import _attach_alive_siblings
+    from fmhy_drift.models import SignalKind, SiteCheckResult, SiteSignal, SiteStatus, WikiEntry
+
+    def entry(eid: str, urls: list[str]) -> WikiEntry:
+        return WikiEntry(
+            entry_id=eid, title=eid, category="c", subcategory="s", source_file="f",
+            line_number=1, starred=False, site_urls=urls,
+        )
+
+    web, ff, chrome = "https://filmot.com/", "https://addons.mozilla.org/x/", "https://chromewebstore.google.com/detail/x/abc"
+    lone = "https://lonely.example/"
+    evil, evil_mirror = "https://evil.example/", "https://ok-mirror.example/"
+    entries = [
+        entry("single-page:1#1", [web]),
+        entry("single-page:1#2", [ff]),
+        entry("single-page:1#3", [chrome]),
+        entry("single-page:2", [lone]),
+        entry("single-page:3", [evil, evil_mirror]),
+    ]
+    removed = SiteSignal(kind=SignalKind.STORE_REMOVED, severity="critical", source="chrome", detail="listing gone")
+    stale = SiteSignal(kind=SignalKind.STORE_STALE, severity="notice", source="amo", detail="last updated 2024-01-01")
+    rereg = SiteSignal(kind=SignalKind.REREGISTERED, severity="critical", source="rdap", detail="registered 2026-01-01")
+    results = {
+        chrome: SiteCheckResult(url=chrome, status=SiteStatus.DEAD, signals=[removed]),
+        ff: SiteCheckResult(url=ff, status=SiteStatus.FLAGGED, signals=[stale]),
+        lone: SiteCheckResult(url=lone, status=SiteStatus.DEAD),
+        evil: SiteCheckResult(url=evil, status=SiteStatus.DEAD, signals=[rereg]),
+    }
+    out = _attach_alive_siblings(entries, results)
+
+    assert out[chrome].alive_siblings == [web, ff]
+    assert out[chrome].is_link_cleanup
+    assert out[ff].alive_siblings == [] and not out[ff].is_link_cleanup
+    assert not out[lone].is_link_cleanup
+    assert out[evil].alive_siblings == [evil_mirror]
+    assert not out[evil].is_link_cleanup

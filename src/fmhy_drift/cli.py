@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import asyncio
 import json
 import os
@@ -416,6 +417,37 @@ def _load_reused_report(
     return repo_cache, site_cache, prev_sites, prev_repos
 
 
+def _attach_alive_siblings(
+    entries: list[WikiEntry], site_results_map: dict[str, SiteCheckResult]
+) -> dict[str, SiteCheckResult]:
+    """Set `alive_siblings` on unhealthy results: other links of the same FMHY line that are not unhealthy.
+
+    One markdown line can yield several entries (`#1`, `#2`... for "/ [Firefox] / [Chrome]" variants),
+    so siblings are grouped by the entry id without its `#n` suffix.
+    """
+    line_urls: dict[str, list[str]] = {}
+    for e in entries:
+        group = line_urls.setdefault(e.entry_id.split("#", 1)[0], [])
+        for u in e.site_urls:
+            if u not in group:
+                group.append(u)
+    out = dict(site_results_map)
+    for e in entries:
+        group = line_urls.get(e.entry_id.split("#", 1)[0], [])
+        for u in e.site_urls:
+            sr = out.get(u)
+            if sr is None or not sr.is_unhealthy:
+                continue
+            alive = [
+                o
+                for o in group
+                if o != u and not (out.get(o) is not None and out[o].is_unhealthy)
+            ]
+            if alive != sr.alive_siblings:
+                out[u] = replace(sr, alive_siblings=alive)
+    return out
+
+
 async def run_drift_pipeline(args: argparse.Namespace) -> int:
     thresholds = TierThresholds(
         tier1_days=args.warn_days_1,
@@ -628,6 +660,8 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
                 print(f"Signal cache saved to {args.signal_cache}", flush=True)
             except OSError as exc:
                 print(f"Warning: could not save signal cache {args.signal_cache}: {exc}", file=sys.stderr)
+
+    site_results_map = _attach_alive_siblings(entries, site_results_map)
 
     # 4. Merge explicit FMHY repo refs + homepage auto-discovered refs, excluding whitelisted repos
     entry_all_refs: list[list[GitHubRef]] = []

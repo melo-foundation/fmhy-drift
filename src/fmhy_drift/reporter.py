@@ -471,6 +471,18 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                     f"without updates (last activity `{last_str}`){web_str}{_format_vulns_inline(rr)}"
                 )
 
+    # Section 5b: dead links on lines that still have working links
+    cleanup_rows = [
+        (item, sr) for item in report.entries for sr in item.site_results if sr.is_link_cleanup
+    ]
+    lines.extend(["", "## 5b. 🧹 To-do: Remove Dead Links (Entry Still Up)", ""])
+    if not cleanup_rows:
+        lines.append("_None._")
+    for item, sr in cleanup_rows:
+        still_up = ", ".join(f"<{u}>" for u in sr.alive_siblings[:4])
+        lines.append(f"- {_entry_location(item)}")
+        lines.append(f"  - remove <{sr.url}> — {sr.reason} | still up: {still_up}")
+
     # Section 6: Dead / Parked / TLS Error sites
     lines.extend(["", "## 6. 🌐 Unhealthy Sites (Dead, Parked, or TLS Error)", ""])
     if pv is None and not dns_only_sites:
@@ -640,6 +652,8 @@ def render_json_report(report: DriftReport) -> str:
                         "inactive_days": sr.inactive_days,
                         "reason": sr.reason,
                         "signals": [sig.to_json() for sig in sr.signals],
+                        "alive_siblings": list(sr.alive_siblings),
+                        "link_cleanup": sr.is_link_cleanup,
                     }
                     for sr in item.site_results
                 ],

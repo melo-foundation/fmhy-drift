@@ -41,6 +41,11 @@ class SignalKind(StrEnum):
 
 SignalSeverity = Literal["critical", "warning", "notice", "info"]
 
+# Dead links with these signals are threats, not cleanup items, even when sibling links still work.
+LINK_CLEANUP_EXCLUDED_KINDS = frozenset(
+    {SignalKind.MALICIOUS, SignalKind.REREGISTERED, SignalKind.DROPCATCH_REGISTRAR}
+)
+
 # Signal kinds that prove the site is unusable on their own.
 DEAD_SIGNAL_KINDS = frozenset(
     {SignalKind.STORE_REMOVED, SignalKind.SCAN_DOWN}
@@ -206,10 +211,22 @@ class SiteCheckResult:
     inactive_days: int | None = None
     discovered_githubs: list[GitHubRef] = field(default_factory=list)
     signals: list[SiteSignal] = field(default_factory=list)
+    # Other links on the same FMHY line that are not dead / parked / TLS-broken (set per run by the CLI).
+    alive_siblings: list[str] = field(default_factory=list)
 
     @property
     def signal_kinds(self) -> set[SignalKind]:
         return {s.kind for s in self.signals}
+
+    @property
+    def is_link_cleanup(self) -> bool:
+        """Dead link whose FMHY line still has working links: remove the link, keep the entry.
+
+        Active threats (malicious, re-registered, drop-caught) stay in their own categories.
+        """
+        if not self.alive_siblings or not self.is_unhealthy:
+            return False
+        return not (self.signal_kinds & LINK_CLEANUP_EXCLUDED_KINDS)
 
     @property
     def is_unhealthy(self) -> bool:
