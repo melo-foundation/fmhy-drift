@@ -421,7 +421,31 @@ async def test_vuln_checker_scans_gitlab_and_codeberg_manifests() -> None:
     assert enriched["codeberg.org/cborg/oldcb"].vulns[0].severity == "CRITICAL"
 
 
-def test_cli_incremental_reuse_report_preserves_github_and_sites(tmp_path: Path) -> None:
+def test_cli_incremental_reuse_report_preserves_github_and_sites(tmp_path: Path, monkeypatch) -> None:
+    import fmhy_drift.cli as cli_mod
+
+    seen_hosts: list[str] = []
+
+    def offline(request: httpx.Request) -> httpx.Response:
+        # Every third-party API answers "nothing known": cached report values must survive untouched.
+        seen_hosts.append(request.url.host)
+        return httpx.Response(404, json={})
+
+    transport = httpx.MockTransport(offline)
+    real_enrich = cli_mod.enrich_unhealthy_sites_last_active
+    real_signals = cli_mod.run_site_signals
+
+    async def enrich_offline(results, **kwargs):
+        kwargs["transport"] = transport
+        return await real_enrich(results, **kwargs)
+
+    async def signals_offline(urls, **kwargs):
+        kwargs["transport"] = transport
+        return await real_signals(urls, **kwargs)
+
+    monkeypatch.setattr(cli_mod, "enrich_unhealthy_sites_last_active", enrich_offline)
+    monkeypatch.setattr(cli_mod, "run_site_signals", signals_offline)
+
     md_file = tmp_path / "sample.md"
     md_file.write_text(
         "# Tools\n* ⭐ **[CachedGH](https://example.org/)** / [GitHub](https://github.com/alice/cached-tool)\n",
@@ -493,9 +517,14 @@ def test_cli_incremental_reuse_report_preserves_github_and_sites(tmp_path: Path)
             str(out_md),
             "--html-out",
             str(out_html),
+            "--signal-cache",
+            str(tmp_path / "signal-cache.json"),
         ]
     )
     assert rc == 0
+    assert seen_hosts, "enrichment and site signals should have queried the mocked APIs"
+    assert "example.org" not in seen_hosts
+    assert (tmp_path / "signal-cache.json").is_file()
     assert (tmp_path / "out" / "404.html").is_file()
     assert (tmp_path / "out" / "severe-vulns" / "index.html").is_file()
     assert (tmp_path / "out" / "done" / "index.html").is_file()

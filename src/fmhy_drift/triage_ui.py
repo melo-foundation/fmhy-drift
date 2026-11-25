@@ -14,6 +14,10 @@ FOLDER_ROUTE_SLUGS: tuple[str, ...] = (
     "warning",
     "notice",
     "dead-sites",
+    "malicious",
+    "hijack-risk",
+    "stores",
+    "suspect",
     "outbox",
     "done",
     "whitelisted",
@@ -692,6 +696,44 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       border-color: #ffffff !important;
       color: #ffffff !important;
     }
+    .sev-pill {
+      display: inline-block;
+      padding: 0 4px;
+      border-radius: 2px;
+      font-size: 9.5px;
+      font-weight: 700;
+      margin-right: 4px;
+      border: 1px solid #888;
+      background: #f2f2f2;
+      color: #444;
+      vertical-align: 1px;
+    }
+    .sev-pill.sev-critical { border-color: #b62324; background: #ffebe9; color: #b62324; }
+    .sev-pill.sev-warning { border-color: #b35900; background: #fff1e0; color: #8a4500; }
+    .sev-pill.sev-notice { border-color: #9a7d00; background: #fff8d6; color: #6e5900; }
+    .sev-pill.sev-info { border-color: #4a6f99; background: #eaf2fb; color: #2f5687; }
+    html.dark .sev-pill.sev-critical { background: #491217; border-color: #f85149; color: #ffa198; }
+    html.dark .sev-pill.sev-warning { background: #3d2408; border-color: #d18616; color: #f0b35a; }
+    html.dark .sev-pill.sev-notice { background: #33300a; border-color: #bfa21c; color: #e6d36a; }
+    html.dark .sev-pill.sev-info { background: #102338; border-color: #4a7fbf; color: #9cc3ef; }
+    tr.selected .sev-pill { background: #ffffff !important; }
+    .tb-signal-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 3px;
+      font-size: 11px;
+    }
+    .tb-signal-table th,
+    .tb-signal-table td {
+      text-align: left;
+      vertical-align: top;
+      padding: 2px 4px;
+      border-bottom: 1px solid #d8d8d8;
+    }
+    .tb-signal-table th { font-weight: 700; color: #555; }
+    html.dark .tb-signal-table th { color: #a9b6c6; }
+    html.dark .tb-signal-table th,
+    html.dark .tb-signal-table td { border-bottom-color: #33404f; }
     .tb-vuln-box {
       background: #fff0ee;
       border: 1px solid #e58e8a;
@@ -1174,6 +1216,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       tier2_warning: "warning",
       tier1_notice: "notice",
       dead_sites: "dead-sites",
+      malicious: "malicious",
+      hijack_risk: "hijack-risk",
+      stores: "stores",
+      suspect_sites: "suspect",
       outbox: "outbox",
       done_pending: "done",
       whitelisted: "whitelisted",
@@ -1197,12 +1243,69 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       tier1_notice: "tier1_notice",
       "dead-sites": "dead_sites",
       dead_sites: "dead_sites",
+      malicious: "malicious",
+      "hijack-risk": "hijack_risk",
+      hijack_risk: "hijack_risk",
+      stores: "stores",
+      suspect: "suspect_sites",
+      suspect_sites: "suspect_sites",
       outbox: "outbox",
       done: "done_pending",
       pending: "done_pending",
       done_pending: "done_pending",
       whitelisted: "whitelisted",
     };
+
+    const SIGNAL_FOLDER_KINDS = {
+      malicious: ["malicious"],
+      hijack_risk: ["reregistered", "dropcatch_registrar", "domain_expired"],
+      stores: ["store_removed", "store_stale"],
+      suspect_sites: ["cert_lapsed", "archive_down", "archive_moved", "scan_down", "scan_up"],
+    };
+    const DEAD_SITE_STATUSES = ["dead", "parked", "tls_error"];
+    const SEVERITY_RANK = { info: 0, notice: 1, warning: 2, critical: 3 };
+    const SEVERITY_SHORT = { critical: "CRIT", warning: "WARN", notice: "NOTE", info: "INFO" };
+    const SIGNAL_KIND_LABELS = {
+      parked_dns: "Parked DNS",
+      domain_expired: "Domain expired",
+      reregistered: "Re-registered",
+      dropcatch_registrar: "Drop-catch registrar",
+      malicious: "Malicious",
+      store_removed: "Store removed",
+      store_stale: "Store stale",
+      cert_lapsed: "Cert lapsed",
+      archive_down: "Archive down",
+      archive_moved: "Archive moved",
+      scan_down: "Scan down",
+      scan_up: "Scan up",
+    };
+
+    function signalKindLabel(kind) {
+      return SIGNAL_KIND_LABELS[kind] || kind;
+    }
+
+    function signalsInFolder(it, folderId) {
+      const sigs = it.signals || [];
+      const kinds = SIGNAL_FOLDER_KINDS[folderId];
+      return kinds ? sigs.filter(sg => kinds.includes(sg.kind)) : sigs;
+    }
+
+    function compareSignals(a, b) {
+      const ra = SEVERITY_RANK[a.severity] ?? 0;
+      const rb = SEVERITY_RANK[b.severity] ?? 0;
+      if (ra !== rb) return rb - ra;
+      return String(b.observed_at || "").localeCompare(String(a.observed_at || ""));
+    }
+
+    function topSignal(it, folderId) {
+      const sigs = signalsInFolder(it, folderId).slice().sort(compareSignals);
+      return sigs.length ? sigs[0] : null;
+    }
+
+    function severityPill(sev) {
+      const cls = SEVERITY_SHORT[sev] ? sev : "info";
+      return `<span class="sev-pill sev-${cls}">${SEVERITY_SHORT[cls]}</span>`;
+    }
 
     function detectRouteContext() {
       try {
@@ -1347,6 +1450,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         { id: "tier2_warning", label: `Inactive >=${state.t2}d`, icon: "folder", tip: `Warning inactivity tier: ${state.t2}–${Math.max(state.t2, state.t3 - 1)} days since last push/release` },
         { id: "tier1_notice", label: `Inactive >=${state.t1}d`, icon: "folder", tip: `Notice inactivity tier: ${state.t1}–${Math.max(state.t1, state.t2 - 1)} days since last push/release` },
         { id: "dead_sites", label: "Dead / Parked Sites", icon: "folder", tip: "Dead DNS, parked domains, and dead/TLS-failing servers (sorted by last-active date)" },
+        { id: "malicious", label: "Malicious", icon: "vuln" },
+        { id: "hijack_risk", label: "Hijack Risk", icon: "folder" },
+        { id: "stores", label: "Stores", icon: "folder" },
+        { id: "suspect_sites", label: "Suspect Sites", icon: "folder" },
         { id: "outbox", label: "Discord Outbox", icon: "outbox", tip: "Entries currently ticked for curated Discord report" },
         { id: "done_pending", label: "Done / Pending", icon: "done", tip: "Items hidden locally (e.g. already reported or parked for later) without adding to whitelist.json" },
         { id: "whitelisted", label: "Whitelisted", icon: "junk", tip: "Globally ignored / whitelisted repositories and URLs (whitelist.json)" },
@@ -1710,7 +1817,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         }
 
         for (const sr of entry.sites || []) {
-          if (!["dead", "parked", "tls_error"].includes(sr.status)) continue;
+          const sigs = Array.isArray(sr.signals)
+            ? sr.signals.filter(sg => sg && typeof sg.kind === "string").slice().sort(compareSignals)
+            : [];
+          if (!DEAD_SITE_STATUSES.includes(sr.status) && sigs.length === 0) continue;
           const wlKey = normalizeUrlKey(sr.url) || String(sr.url || "").trim();
           const origKey = String(sr.url || "").trim();
           const id = `site:${entry.entry_id}:${wlKey}`;
@@ -1744,6 +1854,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             replacementUrl: null,
             replacementStatus: null,
             webUrls: [sr.url],
+            signals: sigs,
           });
         }
       }
@@ -1771,7 +1882,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         const tier = effectiveTier(it);
         if (folderId === "severe_vulns") return it.kind === "repo" && tier !== "active" && it.vulns && it.vulns.length > 0;
         if (folderId === "archived_moved") return it.kind === "repo" && (tier === "archived" || tier === "missing") && Boolean(it.replacementUrl);
-        if (folderId === "dead_sites") return it.kind === "site";
+        if (folderId === "dead_sites") return it.kind === "site" && DEAD_SITE_STATUSES.includes(it.siteStatus);
+        if (SIGNAL_FOLDER_KINDS[folderId]) return it.kind === "site" && signalsInFolder(it, folderId).length > 0;
         return it.kind === "repo" && tier === folderId;
       });
     }
@@ -1815,6 +1927,16 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         else if (state.sortField === "source") { return dir * (a.source || "").localeCompare(b.source || ""); }
         else if (state.sortField === "cat") { return dir * a.catLabel.localeCompare(b.catLabel); }
         else if (state.sortField === "web") { va = a.replacementUrl || a.webUrls?.[0] || ""; vb = b.replacementUrl || b.webUrls?.[0] || ""; return dir * va.localeCompare(vb); }
+        else if (SIGNAL_FOLDER_KINDS[state.activeFolder]) {
+          const sa = topSignal(a, state.activeFolder);
+          const sb = topSignal(b, state.activeFolder);
+          if (sa && sb) {
+            const c = compareSignals(sa, sb);
+            if (c !== 0) return -dir * c;
+          }
+          va = a.sortDays;
+          vb = b.sortDays;
+        }
         else {
           va = a.sortDays;
           vb = b.sortDays;
@@ -1905,6 +2027,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
 
     function formatStatusCell(it) {
+      if (it.kind === "site" && (SIGNAL_FOLDER_KINDS[state.activeFolder] || !DEAD_SITE_STATUSES.includes(it.siteStatus))) {
+        const top = topSignal(it, state.activeFolder);
+        if (top) {
+          const day = top.observed_at ? ` · ${String(top.observed_at).slice(0, 10)}` : "";
+          return `${signalKindLabel(top.kind)}${day}`;
+        }
+      }
       if (it.kind === "site") {
         const sShort = formatAgeShort(it.inactiveDays);
         return sShort ? `${it.siteStatus} · last active ${sShort} ago` : `${it.siteStatus}: ${it.reason || "unhealthy"}`;
@@ -2031,6 +2160,12 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           : { short: "✓ In FMHY", full: "✅ Website URL directly in FMHY listing", isHeur: false };
         const srcCellHtml = `<span class="src-pill${srcInfo.isHeur ? " heur" : ""}" title="${escapeHtml(srcInfo.full)}">${escapeHtml(srcInfo.short)}</span>`;
 
+        let sevBadgeHtml = "";
+        if (it.kind === "site" && it.signals && it.signals.length) {
+          const top = topSignal(it, state.activeFolder) || it.signals[0];
+          sevBadgeHtml = severityPill(top.severity);
+        }
+
         let vulnBadgeHtml = "";
         if (it.vulns && it.vulns.length > 0) {
           const critCnt = it.vulns.filter(v => v.severity === "CRITICAL").length;
@@ -2042,7 +2177,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           <td class="col-cb"><input type="checkbox" class="row-cb" ${isTicked ? "checked" : ""} /></td>
           <td class="col-star">${it.starred ? '<span class="star-on">★</span>' : '<span class="star-off">•</span>'}</td>
           <td class="col-clip">${hasClip ? "📎" : ""}</td>
-          <td class="col-subject" title="${escapeHtml(it.title)}">${escapeHtml(it.title)}${vulnBadgeHtml}</td>
+          <td class="col-subject" title="${escapeHtml(it.title)}">${sevBadgeHtml}${escapeHtml(it.title)}${vulnBadgeHtml}</td>
           <td class="col-repo" title="${escapeHtml(it.fullName || it.siteUrl || "")}">${repoCellHtml}</td>
           <td class="col-src">${srcCellHtml}</td>
           <td class="col-web">${formatWebCell(it)}</td>
@@ -2186,6 +2321,18 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         </div>`;
       }
 
+      if (it.kind === "site" && it.signals && it.signals.length > 0) {
+        const sRows = it.signals.map(sg => {
+          const obs = sg.observed_at ? escapeHtml(String(sg.observed_at).slice(0, 10)) : "—";
+          const ev = sg.evidence_url ? renderSafeLink(sg.evidence_url, shortUrlLabel(sg.evidence_url), "", false) : "—";
+          return `<tr><td>${severityPill(sg.severity)}</td><td>${escapeHtml(signalKindLabel(sg.kind))}</td><td>${escapeHtml(sg.source || "")}</td><td>${escapeHtml(sg.detail || "")}</td><td>${obs}</td><td>${ev}</td></tr>`;
+        }).join("");
+        detailsHtml += `<div class="tb-detail-row" id="card-signals">
+          <strong>Signals (${it.signals.length}):</strong>
+          <table class="tb-signal-table"><thead><tr><th>Severity</th><th>Kind</th><th>Source</th><th>Detail</th><th>Observed</th><th>Evidence</th></tr></thead><tbody>${sRows}</tbody></table>
+        </div>`;
+      }
+
       if (it.vulns && it.vulns.length > 0) {
         const vRows = it.vulns.map(v => {
           const pkg = v.package_name ? ` <code>${escapeHtml(v.package_name)}</code>` : " <em>(repo commit)</em>";
@@ -2244,13 +2391,19 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         { title: "Archived Repos (New Repo Found)", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && it.replacementUrl },
         { title: "Archived Repositories", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && !it.replacementUrl },
         { title: "Inactive Repositories", filter: it => it.kind === "repo" && !["missing", "archived"].includes(effectiveTier(it)) },
-        { title: "Dead / Parked Websites & Domains", filter: it => it.kind === "site" },
+        { title: "Malicious Sites", filter: it => it.kind === "site" && signalsInFolder(it, "malicious").length > 0, folder: "malicious" },
+        { title: "Hijack Risk", filter: it => it.kind === "site" && signalsInFolder(it, "hijack_risk").length > 0, folder: "hijack_risk" },
+        { title: "Store Listings Removed / Stale", filter: it => it.kind === "site" && signalsInFolder(it, "stores").length > 0, folder: "stores" },
+        { title: "Dead / Parked Websites & Domains", filter: it => it.kind === "site" && DEAD_SITE_STATUSES.includes(it.siteStatus) },
+        { title: "Suspect Sites", filter: it => it.kind === "site" && signalsInFolder(it, "suspect_sites").length > 0, folder: "suspect_sites" },
       ];
+      const placed = new Set();
 
       const lines = ["## FMHY Drift Report"];
       for (const g of groups) {
-        const bucket = selected.filter(g.filter);
+        const bucket = selected.filter(it => !placed.has(it.id) && g.filter(it));
         if (!bucket.length) continue;
+        bucket.forEach(it => placed.add(it.id));
         lines.push("", `### ${g.title}`);
         for (const it of bucket) {
           const star = it.starred ? "⭐ " : "";
@@ -2292,6 +2445,15 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
                 : (it.reason || "Empty / unknown age");
             }
             lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.htmlUrl}> [${srcTag}] (${detail})${webPart}${replPart}${vulnPart}${noteSuffix}`);
+          } else if (g.folder) {
+            const sigs = signalsInFolder(it, g.folder).slice().sort(compareSignals);
+            const sigTxt = sigs.map(sg => {
+              const day = sg.observed_at ? `, ${String(sg.observed_at).slice(0, 10)}` : "";
+              return `${signalKindLabel(sg.kind)}: ${sg.detail}${day}`;
+            }).join("; ");
+            const evidence = sigs.map(sg => sg.evidence_url).filter(Boolean);
+            const evPart = evidence.length ? " | Evidence: " + evidence.slice(0, 2).map(u => `<${u}>`).join(", ") : "";
+            lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.siteUrl}> (${sigTxt})${evPart}${noteSuffix}`);
           } else {
             lines.push(`- ${star}**${it.title}** (\`${it.catLabel}\`) — <${it.siteUrl}> (${it.reason || "unhealthy"})${noteSuffix}`);
           }

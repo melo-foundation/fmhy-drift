@@ -17,6 +17,33 @@ class SiteStatus(StrEnum):
     PARKED = "parked"
     TLS_ERROR = "tls_error"
     WAF_OR_RATE_LIMITED = "waf_or_rate_limited"
+    # Site not proven dead, but carries one or more passive `SiteSignal`s (hijack, malware, store, suspect).
+    FLAGGED = "flagged"
+
+
+class SignalKind(StrEnum):
+    """Passive site-health signal produced without contacting the target site from the runner IP."""
+
+    PARKED_DNS = "parked_dns"  # NS / A / CNAME points at a domain-parking provider
+    DOMAIN_EXPIRED = "domain_expired"  # RDAP expiration passed, or redemption / pendingDelete / hold
+    REREGISTERED = "reregistered"  # RDAP registration date is newer than the FMHY listing date
+    DROPCATCH_REGISTRAR = "dropcatch_registrar"  # registrar is a known drop-catch / backorder service
+    MALICIOUS = "malicious"  # listed by Google Safe Browsing / URLhaus / OpenPhish
+    STORE_REMOVED = "store_removed"  # store / registry listing returns 404 / delisted
+    STORE_STALE = "store_stale"  # store / registry listing last updated >= tier1 days ago
+    CERT_LAPSED = "cert_lapsed"  # no CT-logged TLS renewal for a long time while DNS still resolves
+    ARCHIVE_DOWN = "archive_down"  # latest Wayback / Common Crawl captures are consistently non-200
+    ARCHIVE_MOVED = "archive_moved"  # latest captures redirect to a different registrable domain
+    SCAN_DOWN = "scan_down"  # third-party scanner (urlscan.io / Cloudflare) confirmed site down
+    SCAN_UP = "scan_up"  # third-party scanner confirmed site up (clears suspect signals)
+
+
+SignalSeverity = Literal["critical", "warning", "notice", "info"]
+
+# Signal kinds that prove the site is unusable on their own.
+DEAD_SIGNAL_KINDS = frozenset(
+    {SignalKind.STORE_REMOVED, SignalKind.SCAN_DOWN}
+)
 
 
 class StalenessTier(StrEnum):
@@ -117,6 +144,53 @@ class WikiEntry:
     raw_line: str = ""
 
 
+@dataclass(frozen=True)
+class SiteSignal:
+    """One passive health signal attached to a site URL."""
+
+    kind: SignalKind
+    severity: SignalSeverity
+    source: str  # e.g. "rdap", "google_safe_browsing", "urlhaus", "openphish", "amo", "wayback"
+    detail: str  # short human-readable fact, e.g. "registered 2025-03-02, listed on FMHY since 2023-01-10"
+    observed_at: datetime | None = None  # the date the signal refers to (registration, last update, last capture)
+    evidence_url: str | None = None  # link a human can open to verify
+
+    def to_json(self) -> dict:
+        return {
+            "kind": self.kind.value,
+            "severity": self.severity,
+            "source": self.source,
+            "detail": self.detail,
+            "observed_at": self.observed_at.isoformat() if self.observed_at else None,
+            "evidence_url": self.evidence_url,
+        }
+
+    @classmethod
+    def from_json(cls, raw: dict) -> SiteSignal | None:
+        try:
+            kind = SignalKind(raw["kind"])
+        except (KeyError, ValueError):
+            return None
+        sev = raw.get("severity")
+        if sev not in {"critical", "warning", "notice", "info"}:
+            sev = "notice"
+        obs = raw.get("observed_at")
+        obs_dt: datetime | None = None
+        if isinstance(obs, str) and obs:
+            try:
+                obs_dt = datetime.fromisoformat(obs.replace("Z", "+00:00"))
+            except ValueError:
+                obs_dt = None
+        return cls(
+            kind=kind,
+            severity=sev,  # type: ignore[arg-type]
+            source=str(raw.get("source") or ""),
+            detail=str(raw.get("detail") or ""),
+            observed_at=obs_dt,
+            evidence_url=raw.get("evidence_url") or None,
+        )
+
+
 @dataclass
 class SiteCheckResult:
     """Liveness check outcome for a single URL (via proxy or proxy-free DoH DNS)."""
@@ -130,6 +204,11 @@ class SiteCheckResult:
     last_seen_at: datetime | None = None
     inactive_days: int | None = None
     discovered_githubs: list[GitHubRef] = field(default_factory=list)
+    signals: list[SiteSignal] = field(default_factory=list)
+
+    @property
+    def signal_kinds(self) -> set[SignalKind]:
+        return {s.kind for s in self.signals}
 
     @property
     def is_unhealthy(self) -> bool:

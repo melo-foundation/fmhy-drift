@@ -10,12 +10,15 @@ import asyncio
 import ipaddress
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
 
-from fmhy_drift.models import SiteCheckResult, SiteStatus
+from fmhy_drift.domains import is_public_dns_host, is_shared_platform_host, registrable_domain
+from fmhy_drift.models import SignalKind, SiteCheckResult, SiteSignal, SiteStatus
+from fmhy_drift.passive_http import CircuitBreaker, make_client, past_deadline, retry_after_seconds
+from fmhy_drift.signal_cache import SignalCache
 
 CLOUDFLARE_DOH_URL = "https://cloudflare-dns.com/dns-query"
 GOOGLE_DOH_URL = "https://dns.google/resolve"
@@ -579,3 +582,313 @@ async def enrich_unhealthy_sites_last_active(
         )
 
     return updated
+
+
+# ---------------------------------------------------------------------------------------------
+# Passive parking detection via NS / A / CNAME records (DoH only, all hosts).
+# ---------------------------------------------------------------------------------------------
+
+DNS_PARKING_NAMESPACE = "dns_parking"
+DNS_PARKING_TTL = timedelta(days=6)
+
+# Nameserver host suffixes that serve ONLY parking / for-sale landers. Each entry was resolved via DoH on
+# 2026-11-25 and appears in passive-DNS history (dns.coffee) on parked domains. Deliberately excluded:
+# registrar / host default DNS that also serves real zones (Namecheap `registrar-servers.com`, GoDaddy
+# `domaincontrol.com`, Dynadot `dyna-ns.net`, Porkbun `porkbun.com`, Hostinger `dns-parking.com` -- despite its
+# name it is Hostinger's default NS for hosted sites, 163 listed FMHY domains use it) -- such domains may be live.
+PARKING_NS_SUFFIXES: dict[str, str] = {
+    "sedoparking.com": "Sedo",  # ns1/ns2.sedoparking.com (91.195.240.0/23, SEDO-NET)
+    "bodis.com": "Bodis",  # ns1/ns2.bodis.com
+    "parkingcrew.net": "ParkingCrew",  # ns1/ns2.parkingcrew.net (Team Internet)
+    "above.com": "Above.com",  # ns1/ns2.above.com, nsNN.above.com (Trellian)
+    "abovedomains.com": "Above.com",  # ns1/ns2.abovedomains.com (seen 2026-11-25 with A in 103.224.212.0/24)
+    "afternic.com": "Afternic",  # ns1..ns6.afternic.com (Afternic fast-transfer for-sale listing)
+    "dan.com": "Dan.com",  # ns1/ns2.dan.com (for-sale lander, now GoDaddy-operated)
+    "undeveloped.com": "Undeveloped",  # ns1/ns2.undeveloped.com (same GoDaddy for-sale cluster as dan.com)
+    "hugedomains.com": "HugeDomains",  # ns1/ns2.hugedomains.com
+    "parklogic.com": "ParkLogic",  # ns1/ns2.parklogic.com and per-account nsN.<id>.parklogic.com
+    "eftydns.com": "Efty",  # ns1/ns2.eftydns.com (for-sale lander)
+}
+
+# CNAME targets that are parking-only, in addition to `PARKING_CNAME_SUFFIXES` (kept separate so the
+# `DnsDeadChecker` behaviour does not change). `pixie.porkbun.com` is NOT here: it also serves URL forwarding.
+EXTRA_PARKING_CNAME_SUFFIXES = (
+    "parkingpage.namecheap.com",  # Namecheap default "www" parking record
+    "pixie-parking.porkbun.com",  # Porkbun parking-only lander (kb.porkbun.com article 183)
+)
+
+# A-record networks operated by parking companies. Ownership verified via RDAP (rdap.org/ip/...) on
+# 2026-11-25; only blocks whose registered owner IS the parking company. GoDaddy / Namecheap parking IPs are
+# excluded: they sit on shared cloud or shared-hosting ranges (e.g. 203.161.32.251 PTR nc-ph-*.web-hosting.com).
+PARKING_IP_NETWORKS: tuple[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str], ...] = (
+    (ipaddress.ip_network("64.190.62.0/23"), "Sedo"),  # SEDO-NET2 (sedoparking.com -> 64.190.63.136)
+    (ipaddress.ip_network("91.195.240.0/23"), "Sedo"),  # SEDO-NET
+    (ipaddress.ip_network("199.59.240.0/22"), "Bodis"),  # BODIS-COM, Bodis LLC (bodis.com -> 199.59.243.50)
+    (ipaddress.ip_network("185.53.177.0/24"), "ParkingCrew"),  # Team Internet (parkingcrew.net -> 185.53.177.29)
+    (ipaddress.ip_network("185.53.178.0/24"), "ParkingCrew"),  # Team Internet
+    (ipaddress.ip_network("185.53.179.0/24"), "ParkingCrew"),  # Team Internet
+    (ipaddress.ip_network("103.224.182.0/24"), "Above.com"),  # TRELLIAN-AU (park.above.com, PTR lb-182-*.above.com)
+    (ipaddress.ip_network("103.224.212.0/24"), "Above.com"),  # TRELLIAN-AU (ns1.above.com, PTR lb-212-*.above.com)
+    (ipaddress.ip_network("162.4.84.0/24"), "ParkLogic"),  # PARKLOGICPTYLTD-AU (ns1.parklogic.com -> 162.4.84.45)
+)
+
+
+def _ns_suffix_match(name: str) -> tuple[str, str] | None:
+    n = name.strip().rstrip(".").lower()
+    for suffix, label in PARKING_NS_SUFFIXES.items():
+        if n.endswith("." + suffix):
+            return n, label
+    return None
+
+
+def _cname_parking_match(answers: list[dict]) -> str | None:
+    hit = _match_parking_cname(answers)
+    if hit:
+        return hit
+    for ans in answers:
+        if ans.get("type") == 5:
+            target = str(ans.get("data") or "").strip().rstrip(".").lower()
+            for suffix in EXTRA_PARKING_CNAME_SUFFIXES:
+                if target == suffix or target.endswith("." + suffix):
+                    return target
+    return None
+
+
+def _parking_ip_label(raw_ip: str) -> str | None:
+    try:
+        addr = ipaddress.ip_address(raw_ip.strip())
+    except ValueError:
+        return None
+    for net, label in PARKING_IP_NETWORKS:
+        if addr.version == net.version and addr in net:
+            return label
+    return None
+
+
+def _eval_ns(body: dict) -> tuple[list[str], str | None]:
+    """Return `(ns_names, parking_detail)`; parking only when EVERY NS record is a parking nameserver."""
+    answers = body.get("Answer") if isinstance(body.get("Answer"), list) else []
+    names = sorted(
+        {str(a.get("data") or "").strip().rstrip(".").lower() for a in answers if a.get("type") == 2} - {""}
+    )
+    if not names:
+        return names, None
+    matches = [_ns_suffix_match(n) for n in names]
+    if all(matches):
+        first = matches[0]
+        assert first is not None
+        return names, f"NS {first[0]} ({first[1]})"
+    return names, None
+
+
+def _eval_a(body: dict) -> tuple[list[str], str | None]:
+    """Return `(a_ips, parking_detail)` from an A answer (CNAME chain match, or ALL A records in parking nets)."""
+    answers = body.get("Answer") if isinstance(body.get("Answer"), list) else []
+    cname = _cname_parking_match(answers)
+    ips = [str(a.get("data") or "").strip() for a in answers if a.get("type") == 1]
+    ips = [i for i in ips if i]
+    if cname:
+        return ips, f"CNAME {cname}"
+    if ips:
+        labels = [_parking_ip_label(i) for i in ips]
+        if all(labels):
+            return ips, f"A {ips[0]} ({labels[0]})"
+    return ips, None
+
+
+def _parking_signal(detail: str, evidence_name: str, rr: str, now: datetime) -> SiteSignal:
+    return SiteSignal(
+        kind=SignalKind.PARKED_DNS,
+        severity="warning",
+        source="doh",
+        detail=f"{detail}, checked {now.strftime('%Y-%m-%d')}",
+        observed_at=now,
+        evidence_url=f"https://dns.google/query?name={evidence_name}&rr_type={rr}",
+    )
+
+
+async def check_dns_parking(
+    urls: list[str],
+    *,
+    cache: SignalCache,
+    now: datetime,
+    deadline: float | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    concurrency: int = 50,
+    timeout: float = 8.0,
+) -> dict[str, list[SiteSignal]]:
+    """Emit `PARKED_DNS` for URLs whose zone NS, host CNAME, or host A records point at a parking provider.
+
+    Queries only Cloudflare / Google DoH. A positive answer from one resolver is confirmed on the other before
+    it is reported or cached. Cache keys in `dns_parking`: `ns:<registrable domain>` and `a:<host>`.
+    """
+    host_to_urls: dict[str, list[str]] = {}
+    for u in dict.fromkeys(urls):
+        host = (urlsplit(u).hostname or "").lower().rstrip(".")  # query the listed name itself (keeps `www.`)
+        if not is_public_dns_host(host) or is_shared_platform_host(host):
+            continue
+        reg = registrable_domain(host)
+        if reg is None or host in KNOWN_LIVE_PLATFORM_HOSTS or reg in KNOWN_LIVE_PLATFORM_HOSTS:
+            continue
+        host_to_urls.setdefault(host, []).append(u)
+    if not host_to_urls:
+        print("dns_parking: 0 hosts to check", flush=True)
+        return {}
+
+    reg_of = {h: registrable_domain(h) or h for h in host_to_urls}
+    regs = sorted(set(reg_of.values()))
+    sem = asyncio.Semaphore(max(1, concurrency))
+    breakers = {CLOUDFLARE_DOH_URL: CircuitBreaker(40), GOOGLE_DOH_URL: CircuitBreaker(40)}
+    stats = {"queries": 0, "cached": 0, "stale": 0, "unknown": 0, "skipped_deadline": 0}
+    ns_hit: dict[str, str | None] = {}
+    a_hit: dict[str, str | None] = {}
+
+    async def _doh(client: httpx.AsyncClient, endpoint: str, name: str, qtype: str) -> dict | None:
+        br = breakers[endpoint]
+        if br.open:
+            return None
+        for attempt in range(2):
+            stats["queries"] += 1
+            try:
+                resp = await client.get(endpoint, params={"name": name, "type": qtype})
+            except Exception:
+                br.failure()
+                continue
+            if resp.status_code in {429, 503}:
+                br.failure()
+                await asyncio.sleep(retry_after_seconds(resp, default=1.0, cap=10.0))
+                continue
+            if resp.status_code != 200:
+                br.failure()
+                return None
+            try:
+                data = resp.json()
+            except ValueError:
+                br.failure()
+                return None
+            if not isinstance(data, dict) or data.get("Status") not in {0, 3}:
+                # SERVFAIL / REFUSED: no verdict, not a resolver failure.
+                br.success()
+                return None
+            br.success()
+            return data
+        return None
+
+    async def _confirmed(
+        client: httpx.AsyncClient, name: str, qtype: str, evaluate
+    ) -> tuple[bool, list[str], str | None]:
+        """Return `(decided, records, detail)`; positives must be reproduced on the second resolver."""
+        order = [CLOUDFLARE_DOH_URL, GOOGLE_DOH_URL]
+        if breakers[CLOUDFLARE_DOH_URL].open:
+            order.reverse()
+        first = await _doh(client, order[0], name, qtype)
+        used = order[0]
+        if first is None:
+            first = await _doh(client, order[1], name, qtype)
+            used = order[1]
+            if first is None:
+                return False, [], None
+        records, detail = evaluate(first)
+        if detail is None:
+            return True, records, None
+        other = order[1] if used == order[0] else order[0]
+        second = await _doh(client, other, name, qtype)
+        if second is None:
+            return False, records, None
+        _, detail2 = evaluate(second)
+        return True, records, detail if detail2 is not None else None
+
+    def _from_cache(key: str) -> tuple[bool, str | None]:
+        row = cache.get(DNS_PARKING_NAMESPACE, key, ttl=DNS_PARKING_TTL)
+        if isinstance(row, dict):
+            stats["cached"] += 1
+            return True, row.get("parked")
+        return False, None
+
+    async def _ns_task(client: httpx.AsyncClient, reg: str) -> None:
+        key = f"ns:{reg}"
+        found, parked = _from_cache(key)
+        if found:
+            ns_hit[reg] = parked
+            return
+        async with sem:
+            if past_deadline(deadline):
+                stats["skipped_deadline"] += 1
+                return
+            decided, records, detail = await _confirmed(client, reg, "NS", _eval_ns)
+        if not decided:
+            stats["unknown"] += 1
+            return
+        ns_hit[reg] = detail
+        cache.put(DNS_PARKING_NAMESPACE, key, {"ns": records[:8], "parked": detail})
+
+    async def _a_task(client: httpx.AsyncClient, host: str) -> None:
+        key = f"a:{host}"
+        found, parked = _from_cache(key)
+        if found:
+            a_hit[host] = parked
+            return
+        async with sem:
+            if past_deadline(deadline):
+                stats["skipped_deadline"] += 1
+                return
+            decided, records, detail = await _confirmed(client, host, "A", _eval_a)
+        if not decided:
+            stats["unknown"] += 1
+            return
+        a_hit[host] = detail
+        cache.put(DNS_PARKING_NAMESPACE, key, {"a": records[:8], "parked": detail})
+
+    started = time.monotonic()
+    try:
+        async with make_client(
+            transport,
+            timeout=timeout,
+            headers={"Accept": "application/dns-json"},
+            max_connections=max(1, concurrency),
+        ) as client:
+            await asyncio.gather(
+                *(_ns_task(client, r) for r in regs),
+                *(_a_task(client, h) for h in host_to_urls),
+            )
+    except Exception as exc:  # never raise out of a checker
+        print(f"dns_parking: aborted ({type(exc).__name__}: {exc})", flush=True)
+
+    # Budget / failure fallback: reuse any-age cached verdicts for keys not refreshed this run.
+    for reg in regs:
+        if reg not in ns_hit:
+            old = cache.get_any_age(DNS_PARKING_NAMESPACE, f"ns:{reg}")
+            if old and isinstance(old[0], dict):
+                ns_hit[reg] = old[0].get("parked")
+                stats["stale"] += 1
+    for host in host_to_urls:
+        if host not in a_hit:
+            old = cache.get_any_age(DNS_PARKING_NAMESPACE, f"a:{host}")
+            if old and isinstance(old[0], dict):
+                a_hit[host] = old[0].get("parked")
+                stats["stale"] += 1
+
+    out: dict[str, list[SiteSignal]] = {}
+    hits = 0
+    for host, host_urls in host_to_urls.items():
+        reg = reg_of[host]
+        parts = [str(x) for x in (ns_hit.get(reg), a_hit.get(host)) if x]
+        if parts:
+            hits += 1
+            sig = (
+                _parking_signal("; ".join(parts), reg, "NS", now)
+                if ns_hit.get(reg)
+                else _parking_signal(parts[0], host, "A", now)
+            )
+            for u in host_urls:
+                out[u] = [sig]
+    broken = [n for n, b in (("cloudflare", breakers[CLOUDFLARE_DOH_URL]), ("google", breakers[GOOGLE_DOH_URL])) if b.open]
+    print(
+        f"dns_parking: {len(host_to_urls)} hosts / {len(regs)} domains, {hits} parked hosts, "
+        f"{stats['queries']} DoH queries, {stats['cached']} cached, {stats['stale']} stale-reused, "
+        f"{stats['unknown']} undecided, {stats['skipped_deadline']} skipped (deadline)"
+        + (f", circuit open: {','.join(broken)}" if broken else "")
+        + f", {time.monotonic() - started:.0f}s",
+        flush=True,
+    )
+    return out

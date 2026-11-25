@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -14,11 +15,38 @@ from fmhy_drift.models import (
     DriftReport,
     EntryDriftResult,
     RepoActivityResult,
+    SignalKind,
     SiteCheckResult,
+    SiteSignal,
     SiteStatus,
     StalenessTier,
     is_github_pages_url,
 )
+
+# (summary key, Markdown heading, signal kinds); the triage UI folders mirror these groups.
+SIGNAL_CATEGORIES: tuple[tuple[str, str, frozenset[SignalKind]], ...] = (
+    ("malicious", "☣️ Malicious Sites", frozenset({SignalKind.MALICIOUS})),
+    (
+        "hijack_risk",
+        "🪝 Hijack Risk (Re-registered, Drop-Catch, Expired)",
+        frozenset({SignalKind.REREGISTERED, SignalKind.DROPCATCH_REGISTRAR, SignalKind.DOMAIN_EXPIRED}),
+    ),
+    ("stores", "🛒 Store Listings Removed / Stale", frozenset({SignalKind.STORE_REMOVED, SignalKind.STORE_STALE})),
+    (
+        "suspect",
+        "❓ Suspect Sites (Archive, CT, Scanner)",
+        frozenset(
+            {
+                SignalKind.CERT_LAPSED,
+                SignalKind.ARCHIVE_DOWN,
+                SignalKind.ARCHIVE_MOVED,
+                SignalKind.SCAN_DOWN,
+                SignalKind.SCAN_UP,
+            }
+        ),
+    ),
+)
+_SEVERITY_RANK = {"info": 0, "notice": 1, "warning": 2, "critical": 3}
 
 
 @dataclass(frozen=True)
@@ -47,6 +75,9 @@ class ReportSummary:
     newly_discovered_github_links: int
     whitelisted_repos_skipped: int
     whitelisted_sites_skipped: int
+    sites_flagged: int = 0
+    signal_counts: dict[str, int] = field(default_factory=dict)  # unique site URLs per `SignalKind` value
+    signal_category_counts: dict[str, int] = field(default_factory=dict)  # unique site URLs per SIGNAL_CATEGORIES key
 
 
 def summarize_report(report: DriftReport) -> ReportSummary:
@@ -67,6 +98,15 @@ def summarize_report(report: DriftReport) -> ReportSummary:
 
     site_vals = list(sites_by_url.values())
     repo_vals = list(repos_by_key.values())
+    kind_counts: Counter[str] = Counter()
+    cat_counts: Counter[str] = Counter({key: 0 for key, _, _ in SIGNAL_CATEGORIES})
+    for s in site_vals:
+        kinds = s.signal_kinds
+        for k in kinds:
+            kind_counts[k.value] += 1
+        for key, _, cat_kinds in SIGNAL_CATEGORIES:
+            if kinds & cat_kinds:
+                cat_counts[key] += 1
 
     return ReportSummary(
         total_entries=len(report.entries),
@@ -95,6 +135,9 @@ def summarize_report(report: DriftReport) -> ReportSummary:
         newly_discovered_github_links=newly_discovered_count,
         whitelisted_repos_skipped=report.whitelisted_repos_skipped,
         whitelisted_sites_skipped=report.whitelisted_sites_skipped,
+        sites_flagged=sum(1 for s in site_vals if s.status == SiteStatus.FLAGGED),
+        signal_counts={k.value: kind_counts.get(k.value, 0) for k in SignalKind},
+        signal_category_counts=dict(cat_counts),
     )
 
 
@@ -245,6 +288,17 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                 f"| Unique Site URLs Checked (Proxy-Free DoH DNS) | {summary.unique_sites_checked} |",
                 f"| 🔴 Domains Dead in DNS (NXDOMAIN / Sinkhole / Empty) | {summary.sites_dead} |",
                 f"| 🟣 Domains Parked in DNS (Parking CNAME) | {summary.sites_parked} |",
+            ]
+        )
+    if pv is not None or dns_only_sites:
+        cats = summary.signal_category_counts
+        lines.extend(
+            [
+                f"| ☣️ Malicious Sites | {cats.get('malicious', 0)} |",
+                f"| 🪝 Hijack-Risk Domains | {cats.get('hijack_risk', 0)} |",
+                f"| 🛒 Store Listings Removed / Stale | {cats.get('stores', 0)} |",
+                f"| ❓ Suspect Sites | {cats.get('suspect', 0)} |",
+                f"| 🚩 Sites Flagged (Not Proven Dead) | {summary.sites_flagged} |",
             ]
         )
 
@@ -432,8 +486,24 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                     if sr.is_unhealthy:
                         lines.append(f"  - `{sr.status.value}`: <{sr.url}> — {sr.reason}")
 
-    # Section 7: Newly Discovered GitHub Repos on Live Sites
-    lines.extend(["", "## 7. 🔎 Newly Discovered GitHub Repositories on Live Sites", ""])
+    # Sections 7-10: passive site signals
+    for num, (_key, heading, kinds) in enumerate(SIGNAL_CATEGORIES, start=7):
+        lines.extend(["", f"## {num}. {heading}", ""])
+        if pv is None and not dns_only_sites:
+            lines.append("_Skipped in GitHub-only mode._")
+            continue
+        bucket = _collect_signal_entries(report.entries, kinds)
+        if not bucket:
+            lines.append("_None._")
+            continue
+        for item, rows in bucket:
+            lines.append(f"- {_entry_location(item)}")
+            for sr, sigs in rows:
+                for sig in sigs:
+                    lines.append(f"  - {_format_signal_line(sr.url, sig)}")
+
+    # Section 11: Newly Discovered GitHub Repos on Live Sites
+    lines.extend(["", "## 11. 🔎 Newly Discovered GitHub Repositories on Live Sites", ""])
     if pv is None:
         lines.append("_Skipped in GitHub-only mode._")
     else:
@@ -463,6 +533,36 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _signal_sort_key(sig: SiteSignal) -> tuple[int, float]:
+    obs = sig.observed_at.timestamp() if sig.observed_at else float("-inf")
+    return (_SEVERITY_RANK.get(sig.severity, 0), obs)
+
+
+def _collect_signal_entries(
+    entries: list[EntryDriftResult],
+    kinds: frozenset[SignalKind],
+) -> list[tuple[EntryDriftResult, list[tuple[SiteCheckResult, list[SiteSignal]]]]]:
+    """Entries with site signals of `kinds`, strongest severity first, then newest observation."""
+    out: list[tuple[tuple[int, float], EntryDriftResult, list[tuple[SiteCheckResult, list[SiteSignal]]]]] = []
+    for item in entries:
+        rows: list[tuple[SiteCheckResult, list[SiteSignal]]] = []
+        for sr in item.site_results:
+            sigs = sorted((s for s in sr.signals if s.kind in kinds), key=_signal_sort_key, reverse=True)
+            if sigs:
+                rows.append((sr, sigs))
+        if rows:
+            rows.sort(key=lambda r: _signal_sort_key(r[1][0]), reverse=True)
+            out.append((_signal_sort_key(rows[0][1][0]), item, rows))
+    out.sort(key=lambda t: t[0], reverse=True)
+    return [(item, rows) for _, item, rows in out]
+
+
+def _format_signal_line(url: str, sig: SiteSignal) -> str:
+    obs = f", {sig.observed_at.strftime('%Y-%m-%d')}" if sig.observed_at else ""
+    evidence = f" — [evidence]({sig.evidence_url})" if sig.evidence_url else ""
+    return f"**[{sig.severity}]** `{sig.kind.value}`: <{url}> — {sig.detail} ({sig.source}{obs}){evidence}"
 
 
 def _collect_entries_by_tiers(
@@ -532,6 +632,7 @@ def render_json_report(report: DriftReport) -> str:
                         ),
                         "inactive_days": sr.inactive_days,
                         "reason": sr.reason,
+                        "signals": [sig.to_json() for sig in sr.signals],
                     }
                     for sr in item.site_results
                 ],
@@ -619,8 +720,14 @@ def build_discord_payload(report: DriftReport) -> dict:
     t = report.thresholds
     pv = report.proxy_verification
 
+    cats = s.signal_category_counts
     critical_total = (
-        s.entries_all_sites_dead + s.repos_missing + s.repos_archived + s.repos_tier3_critical
+        s.entries_all_sites_dead
+        + s.repos_missing
+        + s.repos_archived
+        + s.repos_tier3_critical
+        + cats.get("malicious", 0)
+        + cats.get("hijack_risk", 0)
     )
     if critical_total > 0:
         color = 0xE74C3C
@@ -676,6 +783,19 @@ def build_discord_payload(report: DriftReport) -> dict:
             "inline": True,
         },
     ]
+    if any(cats.values()) or s.sites_flagged:
+        sc = s.signal_counts
+        fields.append(
+            {
+                "name": "🧭 Site Signals",
+                "value": (
+                    f"☣️ Malicious: **{cats.get('malicious', 0)}** | 🪝 Hijack risk: **{cats.get('hijack_risk', 0)}**\n"
+                    f"🛒 Store removed: **{sc.get('store_removed', 0)}** | stale: **{sc.get('store_stale', 0)}**\n"
+                    f"❓ Suspect: **{cats.get('suspect', 0)}** | 🚩 Flagged: **{s.sites_flagged}**"
+                ),
+                "inline": False,
+            }
+        )
 
     footer_prefix = (
         f"Proxy fingerprint: {pv.egress_ip_sha256_prefix}"

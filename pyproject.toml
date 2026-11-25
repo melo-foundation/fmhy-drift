@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "httpx[socks]>=0.27.0",
+    "publicsuffixlist>=1.1.2.20261124",
 ]
 
 [project.optional-dependencies]

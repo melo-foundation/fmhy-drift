@@ -22,6 +22,7 @@ from fmhy_drift.models import (
     RepoActivityResult,
     RepoVuln,
     SiteCheckResult,
+    SiteSignal,
     SiteStatus,
     StalenessTier,
     TierThresholds,
@@ -45,7 +46,9 @@ from fmhy_drift.reporter import (
     send_discord_webhook,
     summarize_report,
 )
+from fmhy_drift.signal_cache import SignalCache
 from fmhy_drift.site_checker import SiteChecker, filter_discovered_for_entry
+from fmhy_drift.site_signals import run_site_signals
 from fmhy_drift.triage_ui import write_triage_site
 from fmhy_drift.vuln_checker import RepoVulnChecker
 from fmhy_drift.whitelist import load_whitelist
@@ -54,6 +57,11 @@ from fmhy_drift.whitelist import load_whitelist
 def _env_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     return int(raw) if raw else default
+
+
+def _env_float(name: str) -> float | None:
+    raw = os.environ.get(name, "").strip()
+    return float(raw) if raw else None
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -162,6 +170,42 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=_env_int("WARN_DAYS_3", 365),
         help="Tier 3 (Critical) inactivity threshold in days (default: 365 / 1 year).",
+    )
+    parser.add_argument(
+        "--store-warn-days-1",
+        type=int,
+        default=_env_int("STORE_WARN_DAYS_1", 365),
+        help="Store/registry listing notice threshold in days since last update (default: 365).",
+    )
+    parser.add_argument(
+        "--store-warn-days-2",
+        type=int,
+        default=_env_int("STORE_WARN_DAYS_2", 730),
+        help="Store/registry listing warning threshold in days since last update (default: 730).",
+    )
+    parser.add_argument(
+        "--store-warn-days-3",
+        type=int,
+        default=_env_int("STORE_WARN_DAYS_3", 1095),
+        help="Store/registry listing critical threshold in days since last update (default: 1095).",
+    )
+    parser.add_argument(
+        "--site-signals",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("SITE_SIGNALS", True),
+        help="Run passive site signals (parking DNS, RDAP, reputation, stores, archives, CT, scanners) in every mode except --github-only (default: enabled).",
+    )
+    parser.add_argument(
+        "--signal-cache",
+        type=Path,
+        default=Path(".cache/signal-cache.json"),
+        help="Persistent JSON cache for site signals (default: .cache/signal-cache.json).",
+    )
+    parser.add_argument(
+        "--signal-budget-minutes",
+        type=float,
+        default=_env_float("SIGNAL_BUDGET_MINUTES"),
+        help="Time budget for site signals in minutes (or SIGNAL_BUDGET_MINUTES; default: 30, or 5 with --only-alt-forges).",
     )
     parser.add_argument(
         "--discover-github",
@@ -299,6 +343,15 @@ def _load_reused_report(
                     reason=str(sr.get("reason") or ""),
                     last_seen_at=_parse_iso_datetime(sr.get("last_seen_at")),
                     inactive_days=sr.get("inactive_days"),
+                    signals=[
+                        sig
+                        for sig in (
+                            SiteSignal.from_json(raw_sig)
+                            for raw_sig in (sr.get("signals") or [])
+                            if isinstance(raw_sig, dict)
+                        )
+                        if sig is not None
+                    ],
                 ),
             )
         for rr in entry.get("github_repos") or []:
@@ -362,9 +415,15 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         tier2_days=args.warn_days_2,
         tier3_days=args.warn_days_3,
     )
+    store_thresholds = TierThresholds(
+        tier1_days=args.store_warn_days_1,
+        tier2_days=args.store_warn_days_2,
+        tier3_days=args.store_warn_days_3,
+    )
     whitelist = load_whitelist(args.whitelist)
 
     run_site_checks = not args.github_only
+    run_signals = bool(args.site_signals) and not args.github_only
     proxy_url: str | None = None
     proxy_verification: ProxyVerification | None = None
 
@@ -415,6 +474,8 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             "Mode: GitHub repository activity + proxy-free DoH DNS dead-domain check.",
             flush=True,
         )
+    elif run_signals:
+        print("Mode: GitHub repository activity + passive site signals.", flush=True)
     else:
         print("Mode: GitHub repository activity check only (site checks skipped).", flush=True)
 
@@ -432,7 +493,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
 
     entries = _filter_entries(
         entries,
-        github_only=(not run_site_checks and not run_dns_checks),
+        github_only=(not run_site_checks and not run_dns_checks and not run_signals),
         category_filter=args.category,
         starred_only=args.starred_only,
         max_entries=args.max_entries,
@@ -518,8 +579,48 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             f"DoH DNS check flagged {len(site_results_map)} dead/parked site URL(s).",
             flush=True,
         )
+    elif run_signals:
+        print(f"Loaded {len(entries)} FMHY entries.", flush=True)
     else:
         print(f"Loaded {len(entries)} FMHY entries with linked repositories.", flush=True)
+
+    # 3b. Passive site signals (third-party APIs only; never contacts listed sites)
+    if run_signals:
+        raw_urls = list(dict.fromkeys(u for e in entries for u in e.site_urls))
+        signal_urls = [u for u in raw_urls if not whitelist.is_url_whitelisted(u)]
+        if not (incremental_alt_only or run_site_checks or run_dns_checks):
+            whitelisted_sites_skipped = len(raw_urls) - len(signal_urls)
+            unique_site_count = len(signal_urls)
+        if args.signal_budget_minutes is not None:
+            budget_minutes = args.signal_budget_minutes
+        else:
+            budget_minutes = 5.0 if incremental_alt_only else 30.0
+        signal_now = datetime.now(UTC)
+        signal_cache = SignalCache(args.signal_cache, now=signal_now)
+        try:
+            site_results_map = await run_site_signals(
+                signal_urls,
+                cache=signal_cache,
+                now=signal_now,
+                thresholds=thresholds,
+                store_thresholds=store_thresholds,
+                budget_seconds=budget_minutes * 60.0,
+                github_token=args.github_token or None,
+                gsb_api_key=os.environ.get("GOOGLE_SAFE_BROWSING_API_KEY", "").strip() or None,
+                abusech_auth_key=os.environ.get("ABUSECH_AUTH_KEY", "").strip() or None,
+                urlscan_api_key=os.environ.get("URLSCAN_API_KEY", "").strip() or None,
+                cloudflare_api_token=os.environ.get("CLOUDFLARE_API_TOKEN", "").strip() or None,
+                cloudflare_account_id=os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip() or None,
+                certspotter_api_key=os.environ.get("CERTSPOTTER_API_KEY", "").strip() or None,
+                existing=site_results_map,
+            )
+        finally:
+            # Saved even when a checker crashes or the job is cancelled, so the next run resumes from here.
+            try:
+                signal_cache.save()
+                print(f"Signal cache saved to {args.signal_cache}", flush=True)
+            except OSError as exc:
+                print(f"Warning: could not save signal cache {args.signal_cache}: {exc}", file=sys.stderr)
 
     # 4. Merge explicit FMHY repo refs + homepage auto-discovered refs, excluding whitelisted repos
     entry_all_refs: list[list[GitHubRef]] = []
@@ -615,7 +716,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
     for entry, refs in zip(entries, entry_all_refs, strict=True):
         s_results = (
             [site_results_map[u] for u in entry.site_urls if u in site_results_map]
-            if (run_site_checks or run_dns_checks)
+            if (run_site_checks or run_dns_checks or run_signals)
             else []
         )
         candidate_pairs: list[tuple[int, GitHubRef, RepoActivityResult]] = []
@@ -707,6 +808,13 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         f"{summary.repos_tier1_notice} >= {thresholds.tier1_days}d",
         flush=True,
     )
+    if run_signals:
+        cats = summary.signal_category_counts
+        print(
+            f"Site signals: {cats.get('malicious', 0)} malicious, {cats.get('hijack_risk', 0)} hijack risk, "
+            f"{cats.get('stores', 0)} store, {cats.get('suspect', 0)} suspect, {summary.sites_flagged} flagged",
+            flush=True,
+        )
     print(
         f"Reports written to {args.markdown_out}, {args.json_out}, and {args.html_out}",
         flush=True,

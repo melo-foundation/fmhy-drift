@@ -104,12 +104,34 @@ jobs:
         if: steps.check_ui_only.outputs.ui_only != 'true'
         run: uv sync --frozen || uv sync
 
+      - name: Restore site-signal cache
+        if: steps.check_ui_only.outputs.ui_only != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/signal-cache.json
+          key: signal-cache-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            signal-cache-
+
       - name: Run FMHY drift and GitHub staleness check
         if: steps.check_ui_only.outputs.ui_only != 'true'
+        # Leaves headroom inside the 90-minute job for the cache save and Pages upload.
+        timeout-minutes: 80
         env:
           PROXY_URL: ${{ secrets.PROXY_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GOOGLE_SAFE_BROWSING_API_KEY: ${{ secrets.GOOGLE_SAFE_BROWSING_API_KEY }}
+          ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
+          URLSCAN_API_KEY: ${{ secrets.URLSCAN_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CERTSPOTTER_API_KEY: ${{ secrets.CERTSPOTTER_API_KEY }}
+          # Empty = CLI default (30 min full run, 5 min incremental --only-alt-forges run).
+          SIGNAL_BUDGET_MINUTES: ${{ vars.SIGNAL_BUDGET_MINUTES || '' }}
+          STORE_WARN_DAYS_1: ${{ vars.STORE_WARN_DAYS_1 || '365' }}
+          STORE_WARN_DAYS_2: ${{ vars.STORE_WARN_DAYS_2 || '730' }}
+          STORE_WARN_DAYS_3: ${{ vars.STORE_WARN_DAYS_3 || '1095' }}
           GITHUB_ONLY: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.github_only) || vars.GITHUB_ONLY || 'false' }}
           WARN_DAYS_1: ${{ inputs.warn_days_1 || vars.WARN_DAYS_1 || '90' }}
           WARN_DAYS_2: ${{ inputs.warn_days_2 || vars.WARN_DAYS_2 || '180' }}
@@ -148,7 +170,15 @@ jobs:
             --markdown-out reports/fmhy-drift-report.md \
             --json-out reports/fmhy-drift-report.json \
             --html-out reports/index.html \
+            --signal-cache .cache/signal-cache.json \
             "${EXTRA_ARGS[@]}"
+
+      - name: Save site-signal cache
+        if: always() && steps.check_ui_only.outputs.ui_only != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/signal-cache.json
+          key: signal-cache-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload Markdown and JSON drift reports
         if: always()
