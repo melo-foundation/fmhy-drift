@@ -67,10 +67,14 @@ def _is_flagged_site(state: tuple) -> bool:
     return state[0] in _FLAGGED_SITE_STATUSES or bool(state[1])
 
 
-def annotate_changes(current: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any]:
+def annotate_changes(
+    current: dict[str, Any], previous: dict[str, Any] | None, *, carry: bool = False
+) -> dict[str, Any]:
     """Add `change` ("new" | "changed") and `change_from` to rows of `current`, plus a top-level `changes` summary.
 
     With no previous report nothing is marked (a first run would otherwise mark everything new).
+    `carry=True` is for incremental runs that refresh a published report: rows keep the marks they
+    already had (still relative to that report's baseline) and only unmarked rows are diffed.
     """
     if not previous or not isinstance(previous.get("entries"), list):
         current["changes"] = None
@@ -78,15 +82,21 @@ def annotate_changes(current: dict[str, Any], previous: dict[str, Any] | None) -
 
     prev_repos: dict[str, tuple] = {}
     prev_sites: dict[str, tuple] = {}
+    prev_repo_marks: dict[str, tuple] = {}
+    prev_site_marks: dict[str, tuple] = {}
     for entry in previous["entries"]:
         if not isinstance(entry, dict):
             continue
         for rr in entry.get("github_repos") or []:
             if isinstance(rr, dict) and _repo_key(rr):
                 prev_repos.setdefault(_repo_key(rr), _repo_state(rr))
+                if rr.get("change"):
+                    prev_repo_marks.setdefault(_repo_key(rr), (rr["change"], rr.get("change_from")))
         for sr in entry.get("sites") or []:
             if isinstance(sr, dict) and sr.get("url"):
                 prev_sites.setdefault(str(sr["url"]), _site_state(sr))
+                if sr.get("change"):
+                    prev_site_marks.setdefault(str(sr["url"]), (sr["change"], sr.get("change_from")))
 
     counts = {"new": 0, "changed": 0}
     cur_repos: dict[str, tuple] = {}
@@ -99,7 +109,9 @@ def annotate_changes(current: dict[str, Any], previous: dict[str, Any] | None) -
             if not _is_flagged_repo(state):
                 continue
             old = prev_repos.get(key)
-            if old is None or not _is_flagged_repo(old):
+            if carry and key in prev_repo_marks:
+                rr["change"], rr["change_from"] = prev_repo_marks[key]
+            elif old is None or not _is_flagged_repo(old):
                 rr["change"] = "new"
                 rr["change_from"] = _repo_state_label(old) if old else None
             elif old != state:
@@ -115,7 +127,9 @@ def annotate_changes(current: dict[str, Any], previous: dict[str, Any] | None) -
             if not _is_flagged_site(state):
                 continue
             old = prev_sites.get(url)
-            if old is None or not _is_flagged_site(old):
+            if carry and url in prev_site_marks:
+                sr["change"], sr["change_from"] = prev_site_marks[url]
+            elif old is None or not _is_flagged_site(old):
                 sr["change"] = "new"
                 sr["change_from"] = _site_state_label(old) if old else None
             elif old != state:
@@ -135,11 +149,18 @@ def annotate_changes(current: dict[str, Any], previous: dict[str, Any] | None) -
         for u, st in prev_sites.items()
         if _is_flagged_site(st) and not (u in cur_sites and _is_flagged_site(cur_sites[u]))
     )
+    prev_changes = previous.get("changes") if isinstance(previous.get("changes"), dict) else None
     current["changes"] = {
-        "previous_generated_at": previous.get("generated_at"),
+        "previous_generated_at": (
+            prev_changes.get("previous_generated_at")
+            if carry and prev_changes
+            else previous.get("generated_at")
+        ),
         "new": counts["new"],
         "changed": counts["changed"],
-        "resolved": resolved_repos + resolved_sites,
+        "resolved": resolved_repos
+        + resolved_sites
+        + (int(prev_changes.get("resolved") or 0) if carry and prev_changes else 0),
     }
     return current
 

@@ -79,3 +79,25 @@ def test_new_changed_unchanged_and_resolved() -> None:
         "changed": 2,
         "resolved": 2,
     }
+
+
+def test_carry_keeps_existing_marks_and_baseline() -> None:
+    published = _report(
+        [_repo("kept/mark", "archived", change="new", change_from=None)],
+        [_site("https://x.example/", "flagged", [("domain_expired", "warning")])],
+    )
+    published["entries"][0]["sites"][0].update(change="new", change_from=None)
+    published["changes"] = {"previous_generated_at": "2026-11-20T00:00:00+00:00", "new": 2, "changed": 0, "resolved": 1}
+    published["generated_at"] = "2026-11-25T00:00:00+00:00"
+    cur = _report(
+        [_repo("kept/mark", "archived"), _repo("fresh/one", "missing")],
+        [_site("https://x.example/", "flagged", [("domain_held", "warning")])],
+    )
+    out = annotate_changes(cur, published, carry=True)
+    repos = {r["requested_full_name"]: r for r in out["entries"][0]["github_repos"]}
+    site = out["entries"][0]["sites"][0]
+    assert repos["kept/mark"]["change"] == "new"
+    assert repos["fresh/one"]["change"] == "new"
+    assert site["change"] == "new"
+    assert out["changes"]["previous_generated_at"] == "2026-11-20T00:00:00+00:00"
+    assert out["changes"]["resolved"] == 1

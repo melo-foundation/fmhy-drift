@@ -1277,7 +1277,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     const SIGNAL_FOLDER_KINDS = {
       malicious: ["malicious"],
-      hijack_risk: ["reregistered", "dropcatch_registrar", "domain_expired"],
+      hijack_risk: ["reregistered", "dropcatch_registrar", "domain_expired", "domain_held"],
       stores: ["store_removed", "store_stale"],
       suspect_sites: ["cert_lapsed", "archive_down", "archive_moved", "scan_down", "scan_up"],
     };
@@ -1287,6 +1287,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     const SIGNAL_KIND_LABELS = {
       parked_dns: "Parked DNS",
       domain_expired: "Domain expired",
+      domain_held: "Domain on hold",
       reregistered: "Re-registered",
       dropcatch_registrar: "Drop-catch registrar",
       malicious: "Malicious",

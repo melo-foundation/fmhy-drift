@@ -792,7 +792,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             prev_payload = json.loads(args.previous_report.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             prev_payload = None
-        payload = annotate_changes(json.loads(json_text), prev_payload)
+        payload = annotate_changes(json.loads(json_text), prev_payload, carry=incremental_alt_only)
         json_text = json.dumps(payload, indent=2, ensure_ascii=False)
         if payload.get("changes"):
             ch = payload["changes"]

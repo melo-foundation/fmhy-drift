@@ -534,3 +534,24 @@ def test_cli_incremental_mode_uses_five_minute_budget(tmp_path: Path, monkeypatc
     assert main(_cli_args(tmp_path, md, "--reuse-report", str(prev), "--only-alt-forges")) == 0
     assert captured["budget_seconds"] == 5 * 60
     assert captured["existing"]["https://sketchy.example/"].status == SiteStatus.FLAGGED
+
+
+def test_deleted_domain_signal_gets_site_last_active_date() -> None:
+    from datetime import UTC, datetime
+
+    from fmhy_drift.models import SignalKind, SiteCheckResult, SiteSignal, SiteStatus
+    from fmhy_drift.site_signals import merge_site_signals
+
+    url = "https://gone.example.com/"
+    seen = datetime(2026, 9, 28, tzinfo=UTC)
+    existing = {url: SiteCheckResult(url=url, status=SiteStatus.DEAD, reason="NXDOMAIN", last_seen_at=seen)}
+    sig = SiteSignal(
+        kind=SignalKind.DOMAIN_EXPIRED,
+        severity="warning",
+        source="rdap",
+        detail="not registered (registry RDAP 404); deleted by 2026-11-25",
+    )
+    out = merge_site_signals(existing, {url: [sig]})
+    got = out[url].signals[0]
+    assert got.detail.endswith("; site last active 2026-09-28")
+    assert got.observed_at == seen

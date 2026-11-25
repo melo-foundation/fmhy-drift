@@ -25,7 +25,8 @@ class SignalKind(StrEnum):
     """Passive site-health signal produced without contacting the target site from the runner IP."""
 
     PARKED_DNS = "parked_dns"  # NS / A / CNAME points at a domain-parking provider
-    DOMAIN_EXPIRED = "domain_expired"  # RDAP expiration passed, or redemption / pendingDelete / hold
+    DOMAIN_EXPIRED = "domain_expired"  # RDAP expiration passed, redemption / pendingDelete, or deleted (registry 404)
+    DOMAIN_HELD = "domain_held"  # clientHold / serverHold on an unexpired domain (registrar / registry suspension)
     REREGISTERED = "reregistered"  # RDAP registration date is newer than the FMHY listing date
     DROPCATCH_REGISTRAR = "dropcatch_registrar"  # registrar is a known drop-catch / backorder service
     MALICIOUS = "malicious"  # listed by Google Safe Browsing / URLhaus / OpenPhish

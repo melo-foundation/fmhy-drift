@@ -42,7 +42,7 @@ The workflow keeps `.cache/signal-cache.json` in the Actions cache. Delete the `
 | :--- | :--- | :--- |
 | Dead / Parked Sites | `/dead-sites/` | `dead`, `parked`, `tls_error` sites |
 | Malicious | `/malicious/` | `malicious` |
-| Hijack Risk | `/hijack-risk/` | `reregistered`, `dropcatch_registrar`, `domain_expired` |
+| Hijack Risk | `/hijack-risk/` | `reregistered`, `dropcatch_registrar`, `domain_expired`, `domain_held` |
 | Stores | `/stores/` | `store_removed`, `store_stale` |
 | Suspect Sites | `/suspect/` | `cert_lapsed`, `archive_down`, `archive_moved`, `scan_down`, `scan_up` |
 

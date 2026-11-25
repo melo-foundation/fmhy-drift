@@ -69,6 +69,7 @@ _SUSPECT_WEIGHTS: dict[SignalKind, int] = {
     SignalKind.REREGISTERED: 40,
     SignalKind.DROPCATCH_REGISTRAR: 35,
     SignalKind.DOMAIN_EXPIRED: 35,
+    SignalKind.DOMAIN_HELD: 35,
     SignalKind.PARKED_DNS: 30,
     SignalKind.STORE_REMOVED: 30,
     SignalKind.SCAN_DOWN: 25,
@@ -148,6 +149,18 @@ def _summary_reason(signals: list[SiteSignal]) -> str:
     return f"{top.kind.value}: {top.detail}{more}"
 
 
+def _with_last_active(sig: SiteSignal, last_seen: datetime) -> SiteSignal:
+    """Date a deleted domain (registry 404 with no known expiry) by when the site was last seen working."""
+    if (
+        sig.kind != SignalKind.DOMAIN_EXPIRED
+        or "not registered" not in sig.detail
+        or "expired " in sig.detail
+        or "last active" in sig.detail
+    ):
+        return sig
+    return replace(sig, detail=f"{sig.detail}; site last active {last_seen.date().isoformat()}", observed_at=last_seen)
+
+
 def merge_site_signals(
     existing: dict[str, SiteCheckResult],
     signals_by_url: dict[str, list[SiteSignal]],
@@ -164,6 +177,8 @@ def merge_site_signals(
         if not sigs:
             continue
         base = out.get(url)
+        if base is not None and base.last_seen_at is not None:
+            sigs = [_with_last_active(s, base.last_seen_at) for s in sigs]
         if base is None and all(s.kind == SignalKind.SCAN_UP for s in sigs):
             continue  # a lone "scanner says up" is not worth a row
         status = status_for_signals(base.status if base else None, sigs)

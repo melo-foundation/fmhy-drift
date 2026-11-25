@@ -122,6 +122,8 @@ HOLD_STATUSES = {
     "serverhold": "server hold",
     "clienthold": "client hold",
 }
+# Statuses that only occur after expiry (gTLD lifecycle: renew grace -> redemption -> pending delete).
+EXPIRY_LIFECYCLE_STATUSES = frozenset({"redemptionperiod", "pendingdelete", "pendingrestore"})
 
 # Drop-catch / backorder / aftermarket shell registrars, as IANA registrar ID ranges. Derived 2026-11 from
 # https://www.iana.org/assignments/registrar-ids/registrar-ids-1.csv by grouping accredited registrars on their RDAP
@@ -408,13 +410,23 @@ def build_signals(
         # A registry's server answers 404 for second-level zones it does not run (ac.uk, gov.uk): only trust 404
         # for names registered directly under the TLD or under a zone the same registry sells.
         if data.get("authoritative") and _registry_sells(domain):
+            last_exp = _parse_dt(data.get("last_expiration"))
+            last_reg_seen = _parse_dt(data.get("last_registered_seen"))
+            first_nf = _parse_dt(data.get("first_notfound_seen")) or checked_at
+            parts = []
+            if last_exp is not None:
+                parts.append(f"expired {last_exp.date().isoformat()}")
+            if last_reg_seen is not None:
+                parts.append(f"deleted between {last_reg_seen.date().isoformat()} and {first_nf.date().isoformat()}")
+            else:
+                parts.append(f"deleted by {first_nf.date().isoformat()}")
             out.append(
                 SiteSignal(
                     kind=SignalKind.DOMAIN_EXPIRED,
                     severity="warning",
                     source="rdap",
-                    detail=f"not registered (registry RDAP 404), checked {checked_s}",
-                    observed_at=checked_at,
+                    detail="not registered (registry RDAP 404); " + "; ".join(parts),
+                    observed_at=last_exp or first_nf,
                     evidence_url=evidence,
                 )
             )
@@ -498,12 +510,15 @@ def build_signals(
             )
         )
 
-    holds = [HOLD_STATUSES[s] for s in data.get("statuses") or [] if s in HOLD_STATUSES]
+    statuses = data.get("statuses") or []
+    holds = [HOLD_STATUSES[s] for s in statuses if s in HOLD_STATUSES]
+    lifecycle = [HOLD_STATUSES[s] for s in statuses if s in EXPIRY_LIFECYCLE_STATUSES]
     exp = _parse_dt(data.get("expiration"))
+    last_changed = _parse_dt(data.get("last_changed"))
     expired = exp is not None and exp < checked_at
-    if holds or (expired and exp is not None and exp < checked_at - EXPIRY_GRACE):
+    if lifecycle or (expired and exp is not None and exp < checked_at - EXPIRY_GRACE):
         parts = []
-        if expired and exp:
+        if exp is not None:
             parts.append(f"expired {exp.date().isoformat()}")
         if holds:
             parts.append("status " + ", ".join(holds))
@@ -513,7 +528,22 @@ def build_signals(
                 severity="warning",
                 source="rdap",
                 detail="; ".join(parts) + f", checked {checked_s}",
-                observed_at=exp if expired else checked_at,
+                observed_at=exp if exp is not None else checked_at,
+                evidence_url=evidence,
+            )
+        )
+    elif holds:
+        # A hold on an unexpired domain is a suspension (abuse / DMCA / non-payment dispute), not an expiry.
+        # RDAP "last changed" is the best available date for when the hold was applied.
+        since = f" since {last_changed.date().isoformat()}" if last_changed else ""
+        until = f"; paid until {exp.date().isoformat()}" if exp else ""
+        out.append(
+            SiteSignal(
+                kind=SignalKind.DOMAIN_HELD,
+                severity="warning",
+                source="rdap",
+                detail=f"status {', '.join(holds)}{since}{until}",
+                observed_at=last_changed or checked_at,
                 evidence_url=evidence,
             )
         )
@@ -867,16 +897,14 @@ async def _query(
             srv.breaker.failure()
             return
         if resp is not None and resp.status_code == 404:
-            cache.put(
-                CACHE_NS,
-                dom,
-                {
-                    "schema": CACHE_SCHEMA,
-                    "state": "notfound",
-                    "authoritative": authoritative,
-                    "url": url,
-                },
-            )
+            nf: dict[str, Any] = {
+                "schema": CACHE_SCHEMA,
+                "state": "notfound",
+                "authoritative": authoritative,
+                "url": url,
+            }
+            _carry_last_registered(cache, dom, nf)
+            cache.put(CACHE_NS, dom, nf)
             srv.notfound += 1
             srv.breaker.success()
             return
@@ -905,6 +933,23 @@ async def _query(
         await asyncio.sleep(1.0 * (attempt + 1))
     srv.failed += 1
     srv.breaker.failure()
+
+
+def _carry_last_registered(cache: SignalCache, dom: str, nf: dict[str, Any]) -> None:
+    """Keep the last registered record's expiry / statuses on a registry 404, so a deletion keeps its dates."""
+    prev = cache.get_any_age(CACHE_NS, dom)
+    if not prev or not isinstance(prev[0], dict):
+        return
+    old, old_checked = prev
+    if old.get("state") == "ok":
+        nf["last_expiration"] = old.get("expiration")
+        nf["last_statuses"] = old.get("statuses") or []
+        nf["last_registered_seen"] = old_checked.isoformat()
+    elif old.get("state") == "notfound":
+        for k in ("last_expiration", "last_statuses", "last_registered_seen"):
+            if old.get(k):
+                nf[k] = old[k]
+        nf["first_notfound_seen"] = old.get("first_notfound_seen") or old_checked.isoformat()
 
 
 def _carry_rereg(cache: SignalCache, dom: str, data: dict[str, Any]) -> None:

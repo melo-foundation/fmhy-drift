@@ -29,7 +29,14 @@ SIGNAL_CATEGORIES: tuple[tuple[str, str, frozenset[SignalKind]], ...] = (
     (
         "hijack_risk",
         "🪝 Hijack Risk (Re-registered, Drop-Catch, Expired)",
-        frozenset({SignalKind.REREGISTERED, SignalKind.DROPCATCH_REGISTRAR, SignalKind.DOMAIN_EXPIRED}),
+        frozenset(
+            {
+                SignalKind.REREGISTERED,
+                SignalKind.DROPCATCH_REGISTRAR,
+                SignalKind.DOMAIN_EXPIRED,
+                SignalKind.DOMAIN_HELD,
+            }
+        ),
     ),
     ("stores", "🛒 Store Listings Removed / Stale", frozenset({SignalKind.STORE_REMOVED, SignalKind.STORE_STALE})),
     (

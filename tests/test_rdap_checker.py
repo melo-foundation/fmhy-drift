@@ -619,3 +619,65 @@ def test_no_false_positives_for_unsold_zones_and_unreliable_tlds() -> None:
         )
         == []
     )
+
+
+def test_hold_on_unexpired_domain_is_held_not_expired() -> None:
+    data = {
+        "schema": 1,
+        "state": "ok",
+        "registration": "2026-03-31T12:38:15+00:00",
+        "expiration": "2028-03-31T12:38:15+00:00",
+        "last_changed": "2026-11-12T14:13:10+00:00",
+        "statuses": ["clienthold", "clienttransferprohibited"],
+        "registrar": "Tonic",
+        "url": "https://rdap.tonicregistry.to/rdap/domain/voir-anime.to",
+    }
+    sigs = build_signals("voir-anime.to", data, checked_at=NOW, listed_since=None)
+    assert [s.kind for s in sigs] == [SignalKind.DOMAIN_HELD]
+    assert sigs[0].detail == "status client hold since 2026-11-12; paid until 2028-03-31"
+    assert sigs[0].observed_at == datetime(2026, 11, 12, 14, 13, 10, tzinfo=UTC)
+
+
+def test_redemption_with_hold_is_expired_with_expiry_date() -> None:
+    data = {
+        "schema": 1,
+        "state": "ok",
+        "registration": "2025-10-24T00:25:25+00:00",
+        "expiration": "2026-10-24T00:25:25+00:00",
+        "last_changed": "2026-11-23T22:47:42+00:00",
+        "statuses": ["pendingdelete", "redemptionperiod", "serverhold"],
+        "url": "https://rdap.tonicregistry.to/rdap/domain/rawfree.to",
+    }
+    sigs = build_signals("rawfree.to", data, checked_at=NOW, listed_since=None)
+    assert [s.kind for s in sigs] == [SignalKind.DOMAIN_EXPIRED]
+    assert sigs[0].detail.startswith("expired 2026-10-24; status pending delete, redemption period, server hold")
+    assert sigs[0].observed_at == datetime(2026, 10, 24, 0, 25, 25, tzinfo=UTC)
+
+
+def test_deleted_domain_keeps_last_known_expiry(tmp_path) -> None:
+    dom = "gone.com"
+    first = SignalCache(tmp_path / "c.json", now=NOW - timedelta(days=60))
+    first.put(rdap_checker.CACHE_NS, dom, {
+        "schema": 1,
+        "state": "ok",
+        "expiration": "2026-08-01T00:00:00+00:00",
+        "statuses": ["redemptionperiod"],
+    })
+    first.save()
+    second = SignalCache(tmp_path / "c.json", now=NOW - timedelta(days=7))
+    nf = {"schema": 1, "state": "notfound", "authoritative": True}
+    rdap_checker._carry_last_registered(second, dom, nf)
+    second.put(rdap_checker.CACHE_NS, dom, nf)
+    second.save()
+    third = SignalCache(tmp_path / "c.json", now=NOW)
+    nf2 = {"schema": 1, "state": "notfound", "authoritative": True}
+    rdap_checker._carry_last_registered(third, dom, nf2)
+
+    assert nf2["last_expiration"] == "2026-08-01T00:00:00+00:00"
+    sigs = build_signals(dom, nf2, checked_at=NOW, listed_since=None)
+    assert [s.kind for s in sigs] == [SignalKind.DOMAIN_EXPIRED]
+    d0 = (NOW - timedelta(days=60)).date().isoformat()
+    d1 = (NOW - timedelta(days=7)).date().isoformat()
+    assert sigs[0].detail == (
+        f"not registered (registry RDAP 404); expired 2026-08-01; deleted between {d0} and {d1}"
+    )
