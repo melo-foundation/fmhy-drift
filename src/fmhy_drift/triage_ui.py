@@ -1325,6 +1325,26 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       return kinds ? sigs.filter(sg => kinds.includes(sg.kind)) : sigs;
     }
 
+    function storeStaleDays(sigs, generatedAt) {
+      const st = (sigs || []).find(sg => sg.kind === "store_stale" && sg.observed_at);
+      if (!st) return null;
+      const end = generatedAt ? new Date(generatedAt) : new Date();
+      const d = Math.floor((end - new Date(st.observed_at)) / 86400000);
+      return Number.isFinite(d) && d >= 0 ? d : null;
+    }
+
+    function ageShort(days) {
+      if (days == null) return "";
+      if (days >= 365) return `${Math.floor(days / 365)}y`;
+      if (days >= 30) return `${Math.floor(days / 30)}mo`;
+      return `${days}d`;
+    }
+
+    // Store staleness severity is only an age bucket: shown as the age, ordered by age.
+    function isStaleOnly(sig) {
+      return sig && sig.kind === "store_stale";
+    }
+
     function compareSignals(a, b) {
       const ra = SEVERITY_RANK[a.severity] ?? 0;
       const rb = SEVERITY_RANK[b.severity] ?? 0;
@@ -2138,7 +2158,11 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             siteStatus: sr.status,
             inactiveDays: siteInactiveDays,
             lastActivityAt: siteLastSeen,
-            sortDays: siteInactiveDays != null ? 1_500_000 + siteInactiveDays : 1_500_000,
+            // One age per site for sorting: days down, else days since the store listing updated, else inactive days.
+            sortDays: 1_500_000 + (
+              sr.down_days != null ? sr.down_days
+              : storeStaleDays(sigs, report.generated_at) ?? (siteInactiveDays ?? 0)
+            ),
             reason: sr.reason || "",
             replacementUrl: null,
             replacementStatus: null,
@@ -2243,9 +2267,12 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         else if (SIGNAL_FOLDER_KINDS[state.activeFolder]) {
           const sa = topSignal(a, state.activeFolder);
           const sb = topSignal(b, state.activeFolder);
-          if (sa && sb) {
-            const c = compareSignals(sa, sb);
-            if (c !== 0) return -dir * c;
+          // Severity groups first, except staleness vs staleness: its severity is just the age bucket.
+          if (sa && sb && !(isStaleOnly(sa) && isStaleOnly(sb))) {
+            const ra = SEVERITY_RANK[sa.severity] ?? 0;
+            const rb = SEVERITY_RANK[sb.severity] ?? 0;
+            if (ra !== rb && !(isStaleOnly(sa) || isStaleOnly(sb))) return dir * (ra - rb);
+            if (isStaleOnly(sa) !== isStaleOnly(sb)) return dir * (isStaleOnly(sa) ? -1 : 1);
           }
           va = a.sortDays;
           vb = b.sortDays;
@@ -2490,7 +2517,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         let sevBadgeHtml = "";
         if (it.kind === "site" && it.signals && it.signals.length) {
           const top = topSignal(it, state.activeFolder) || it.signals[0];
-          sevBadgeHtml = severityPill(top.severity);
+          if (isStaleOnly(top)) {
+            const days = storeStaleDays([top], state.reportGeneratedAt);
+            const cls = SEVERITY_SHORT[top.severity] ? top.severity : "info";
+            sevBadgeHtml = `<span class="sev-pill sev-${cls}">${ageShort(days)}</span>`;
+          } else {
+            sevBadgeHtml = severityPill(top.severity);
+          }
         }
 
         const changeBadgeHtml = it.change
