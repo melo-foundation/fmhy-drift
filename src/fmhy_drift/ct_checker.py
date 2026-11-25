@@ -33,6 +33,7 @@ CRTSH_URL = "https://crt.sh/"
 
 CT_NAMESPACE = "ct"
 CT_TTL = timedelta(days=14)
+CT_POSITIVE_TTL = timedelta(days=3)
 
 SHORT_LIVED_MAX_DAYS = 100  # LE / ZeroSSL / GTS 90-day style (and shorter)
 MIN_SHORT_ISSUANCES = 3
@@ -254,7 +255,13 @@ async def check_cert_cadence(
     try:
         async with make_client(transport, timeout=15.0) as client:
             for host in host_urls:
-                cached = cache.get(CT_NAMESPACE, host, ttl=CT_TTL)
+                cached = cache.get(
+                    CT_NAMESPACE,
+                    host,
+                    ttl=CT_TTL,
+                    positive_ttl=CT_POSITIVE_TTL,
+                    is_positive=lambda d: isinstance(d, dict) and bool(d.get("lapsed")),
+                )
                 if isinstance(cached, dict):
                     verdicts[host] = cached
                     stats["cached"] += 1

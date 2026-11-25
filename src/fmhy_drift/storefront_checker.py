@@ -46,6 +46,7 @@ from fmhy_drift.signal_cache import SignalCache
 
 CACHE_NS = "storefront"
 CACHE_TTL = timedelta(days=6)
+POSITIVE_TTL = timedelta(hours=20)  # removed / stale listings are rechecked every daily-or-slower run
 
 API_UA = "fmhy-drift-checker/0.1"
 # Google Play / Chrome Web Store / F-Droid serve reduced or bot pages to unknown agents.
@@ -1002,7 +1003,14 @@ async def check_storefronts(
 
     for key, it in items.items():
         pstat(it.platform)["items"] += 1
-        hit = cache.get(CACHE_NS, key, ttl=CACHE_TTL)
+        hit = cache.get(
+            CACHE_NS,
+            key,
+            ttl=CACHE_TTL,
+            positive_ttl=POSITIVE_TTL,
+            is_positive=lambda d, _it=it: isinstance(d, dict)
+            and bool(signals_from_data(_it, d, now=now, thresholds=thresholds)),
+        )
         if isinstance(hit, dict):
             results[key] = hit
             pstat(it.platform)["cached"] += 1

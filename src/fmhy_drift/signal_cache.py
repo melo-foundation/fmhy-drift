@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 CACHE_VERSION = 1
@@ -29,8 +30,20 @@ class SignalCache:
             except (OSError, ValueError):
                 self._ns = {}
 
-    def get(self, namespace: str, key: str, *, ttl: timedelta) -> Any | None:
-        """Return cached `data` for `key` if it was checked within `ttl`, else `None`."""
+    def get(
+        self,
+        namespace: str,
+        key: str,
+        *,
+        ttl: timedelta,
+        positive_ttl: timedelta | None = None,
+        is_positive: Callable[[Any], bool] | None = None,
+    ) -> Any | None:
+        """Return cached `data` for `key` if it was checked within `ttl`, else `None`.
+
+        Flagged results (`is_positive(data)`) expire after the shorter `positive_ttl`, so a site that
+        recovers stops being reported within a day or two instead of after the full clean-result TTL.
+        """
         row = self._ns.get(namespace, {}).get(key)
         if not isinstance(row, dict):
             return None
@@ -41,9 +54,17 @@ class SignalCache:
             return None
         if checked_dt.tzinfo is None:
             checked_dt = checked_dt.replace(tzinfo=UTC)
-        if self.now - checked_dt > ttl:
+        age = self.now - checked_dt
+        if age > ttl:
             return None
-        return row.get("data")
+        data = row.get("data")
+        if positive_ttl is not None and is_positive is not None and age > positive_ttl:
+            try:
+                if is_positive(data):
+                    return None
+            except Exception:  # noqa: BLE001 -- a malformed row is simply re-queried
+                return None
+        return data
 
     def get_any_age(self, namespace: str, key: str) -> tuple[Any, datetime] | None:
         """Return `(data, checked_at)` regardless of age, for keys a budgeted run could not refresh."""

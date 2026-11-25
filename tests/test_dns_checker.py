@@ -101,3 +101,48 @@ def test_dns_checker_detects_nxdomain_sinkhole_parked_and_skips_alive_or_onion()
 
     assert results["https://forsale.example.org/"].status == SiteStatus.PARKED
     assert "sedoparking.com" in results["https://forsale.example.org/"].reason
+
+
+def test_resolving_urls_needs_both_resolvers_and_ignores_failures() -> None:
+    from fmhy_drift.dns_checker import resolving_urls
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = request.url.params.get("name", "")
+        qtype = request.url.params.get("type", "A")
+        if name == "back.example.org" and qtype == "A":
+            return httpx.Response(200, json={"Status": 0, "Answer": [{"type": 1, "data": "93.184.216.34"}]})
+        if name == "half.example.org" and qtype == "A":
+            if request.url.host == "cloudflare-dns.com":
+                return httpx.Response(200, json={"Status": 0, "Answer": [{"type": 1, "data": "93.184.216.34"}]})
+            return httpx.Response(503)
+        if name == "parked.example.org":
+            return httpx.Response(
+                200, json={"Status": 0, "Answer": [{"type": 5, "data": "x.sedoparking.com."}]}
+            )
+        if name == "still-dead.example.org":
+            return httpx.Response(200, json={"Status": 3})
+        return httpx.Response(200, json={"Status": 0})
+
+    urls = [
+        "https://back.example.org/a",
+        "https://half.example.org/",
+        "https://parked.example.org/",
+        "https://still-dead.example.org/",
+    ]
+    got = asyncio.run(resolving_urls(urls, transport=httpx.MockTransport(handler)))
+    assert got == {"https://back.example.org/a"}
+
+
+def test_signal_cache_positive_ttl_expires_flagged_rows_only() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from fmhy_drift.signal_cache import SignalCache
+
+    t0 = datetime(2026, 11, 1, tzinfo=UTC)
+    c = SignalCache(None, now=t0)
+    c.put("ns", "flagged", {"parked": "sedo"})
+    c.put("ns", "clean", {"parked": None})
+    c.now = t0 + timedelta(days=2)
+    kw = {"ttl": timedelta(days=6), "positive_ttl": timedelta(hours=20), "is_positive": lambda d: bool(d.get("parked"))}
+    assert c.get("ns", "flagged", **kw) is None
+    assert c.get("ns", "clean", **kw) == {"parked": None}

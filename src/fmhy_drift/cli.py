@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fmhy_drift.alt_forge_checker import AltForgeActivityChecker
-from fmhy_drift.dns_checker import DnsDeadChecker, enrich_unhealthy_sites_last_active
+from fmhy_drift.dns_checker import DnsDeadChecker, enrich_unhealthy_sites_last_active, resolving_urls
 from fmhy_drift.github_checker import SOURCE_PRIORITY, GitHubActivityChecker, _parse_iso_datetime
 from fmhy_drift.models import (
     DriftReport,
@@ -573,6 +573,20 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
             for u, sr in reused_site_map.items()
             if not whitelist.is_url_whitelisted(u)
         }
+        # Reused DNS-dead results are rechecked so a domain that came back drops out on the next push run.
+        dns_dead_urls = [
+            u
+            for u, sr in site_results_map.items()
+            if sr.is_unhealthy and ("DNS" in sr.reason or sr.reason.startswith("Domain does not exist"))
+        ]
+        if dns_dead_urls:
+            back_up = await resolving_urls(dns_dead_urls)
+            for u in back_up:
+                site_results_map.pop(u, None)
+            print(
+                f"Rechecked {len(dns_dead_urls)} reused DNS-dead URL(s): {len(back_up)} resolve again.",
+                flush=True,
+            )
         if any(
             sr.is_unhealthy and (sr.last_seen_at is None or ("CT" not in sr.reason and "RDAP" not in sr.reason))
             for sr in site_results_map.values()

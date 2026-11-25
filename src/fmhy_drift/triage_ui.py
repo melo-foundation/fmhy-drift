@@ -8,6 +8,7 @@ FOLDER_ROUTE_SLUGS: tuple[str, ...] = (
     "inbox",
     "new",
     "todo",
+    "recovered",
     "dead-repos",
     "severe-vulns",
     "moved",
@@ -22,6 +23,7 @@ FOLDER_ROUTE_SLUGS: tuple[str, ...] = (
     "suspect",
     "outbox",
     "done",
+    "reported",
     "whitelisted",
 )
 
@@ -734,6 +736,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     html.dark .chg-pill { background: #12301c; border-color: #3fb950; color: #7ee2a0; }
     html.dark .chg-pill.chg-changed { background: #231c3d; border-color: #8e7bdc; color: #c4b8f5; }
     tr.selected .chg-pill { background: #ffffff !important; }
+    .chg-pill.rpt-again { border-color: #b62324; background: #ffebe9; color: #b62324; }
+    .chg-pill.rpt-update { border-color: #b35900; background: #fff1e0; color: #8a4500; }
+    html.dark .chg-pill.rpt-again { background: #491217; border-color: #f85149; color: #ffa198; }
+    html.dark .chg-pill.rpt-update { background: #3d2408; border-color: #d18616; color: #f0b35a; }
     .tb-signal-table {
       width: 100%;
       border-collapse: collapse;
@@ -993,15 +999,15 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       <a class="tb-menu-item" id="menu-file-md" href="./fmhy-drift-report.md" target="_blank" rel="noopener"><u>F</u>ile (.md)</a>
       <a class="tb-menu-item" id="menu-data-json" href="./fmhy-drift-report.json" target="_blank" rel="noopener"><u>D</u>ata (.json)</a>
       <span class="tb-menu-item" id="menu-tick-page"><u>E</u>dit (Tick Page)</span>
-      <span class="tb-menu-item" id="menu-ticked-done" title="Hide all currently ticked items in local Done / Pending folder and clear ticks">✓ Ticked &rarr; <u>D</u>one</span>
+      <span class="tb-menu-item" id="menu-ticked-done">✓ Ticked &rarr; Reported</span>
       <span class="tb-menu-item" id="menu-clear-ticks"><u>C</u>lear Ticks</span>
-      <span class="tb-menu-item" id="menu-restore-done" title="Move all items in Done / Pending back to Inbox">Restore Done</span>
+      <span class="tb-menu-item" id="menu-restore-done">Restore Reported</span>
       <span class="tb-menu-item" id="menu-outbox"><u>M</u>essage Outbox</span>
       <span class="tb-menu-item" id="menu-copy-wl"><u>T</u>ools (Edit whitelist.json)</span>
       <span class="tb-menu-item" id="menu-theme-toggle"><u>V</u>iew (☀️ Light / 🌙 Dark)</span>
       <a class="tb-menu-item" id="menu-help-gh" href="https://github.com/melo-foundation/fmhy-drift" target="_blank" rel="noopener"><u>H</u>elp (GitHub)</a>
       <div class="tb-menubar-spacer"></div>
-      <span class="tb-muted-note" style="font-size:10.5px;padding-right:6px;">Keys: ↑/↓ Navigate · Space Tick · D Done/Hide · J Whitelist</span>
+      <span class="tb-muted-note" style="font-size:10.5px;padding-right:6px;">Keys: ↑/↓ Navigate · Space Tick · D Reported · J Whitelist</span>
     </div>
 
     <!-- Big-Icon XUL Toolbar -->
@@ -1028,9 +1034,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         <span>Tag / Tick</span>
       </button>
 
-      <button type="button" class="tb-tool-btn" id="btn-ticked-done" title="Move all ticked items (or focused item if none ticked) to local Done / Pending folder so they hide from Inbox">
+      <button type="button" class="tb-tool-btn" id="btn-ticked-done" title="Ticked → Reported">
         <svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3V6z" fill="#7fc8a9" stroke="#23684b" stroke-width="1.4"/><path d="M8.5 13l2.3 2.3 4.7-4.7" fill="none" stroke="#134e35" stroke-width="2" stroke-linecap="round"/></svg>
-        <span>Ticked &rarr; Done</span>
+        <span>Ticked &rarr; Reported</span>
       </button>
 
       <button type="button" class="tb-tool-btn" id="btn-junk-wl" title="Whitelist / Unwhitelist selected item (Key: J)">
@@ -1136,7 +1142,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             </div>
             <div class="tb-btn-row" style="margin:0;">
               <button type="button" class="tb-classic-btn" id="hdr-tick-btn">✓ Tick for Discord</button>
-              <button type="button" class="tb-classic-btn" id="hdr-done-btn" title="Hide locally in Done / Pending folder without whitelisting (Key: D)">📥 Done / Pending</button>
+              <button type="button" class="tb-classic-btn" id="hdr-done-btn" title="Reported (D)">📥 Reported</button>
               <button type="button" class="tb-classic-btn" id="hdr-wl-btn">🔥 Whitelist</button>
             </div>
           </div>
@@ -1170,7 +1176,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
               <div class="tb-btn-row">
                 <button type="button" class="tb-classic-btn primary" id="copy-md-btn">Copy Markdown</button>
                 <button type="button" class="tb-classic-btn" id="download-md-btn">Save .md</button>
-                <button type="button" class="tb-classic-btn" id="outbox-move-done-btn" title="Move all ticked items into local Done / Pending folder (hides them from Inbox) and clear ticks">✓ Ticked &rarr; Done</button>
+                <button type="button" class="tb-classic-btn" id="outbox-move-done-btn">✓ Ticked &rarr; Reported</button>
                 <button type="button" class="tb-classic-btn" id="outbox-untick-btn" title="Unselect all ticked items without hiding them">Untick All</button>
                 <input type="password" id="webhook-url" class="tb-input" style="flex:1;min-width:130px;" placeholder="Discord Webhook URL..." />
                 <button type="button" class="tb-classic-btn primary" id="send-discord-btn">Send to Discord</button>
@@ -1202,7 +1208,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       </div>
       <div class="tb-status-panel" id="stat-showing">Showing: 0</div>
       <div class="tb-status-panel" id="stat-ticked">Ticked: 0</div>
-      <div class="tb-status-panel" id="stat-done">Done: 0</div>
+      <div class="tb-status-panel" id="stat-done">Reported: 0</div>
       <div class="tb-status-panel" id="stat-wl">Whitelisted: 0</div>
     </div>
   </div>
@@ -1227,6 +1233,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       inbox_all: "inbox",
       new_items: "new",
       todo: "todo",
+      recovered: "recovered",
       missing: "dead-repos",
       severe_vulns: "severe-vulns",
       archived_moved: "moved",
@@ -1250,6 +1257,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       new: "new_items",
       new_items: "new_items",
       todo: "todo",
+      recovered: "recovered",
       "dead-repos": "missing",
       missing: "missing",
       "severe-vulns": "severe_vulns",
@@ -1273,6 +1281,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       suspect_sites: "suspect_sites",
       outbox: "outbox",
       done: "done_pending",
+      reported: "done_pending",
       pending: "done_pending",
       done_pending: "done_pending",
       whitelisted: "whitelisted",
@@ -1433,6 +1442,10 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       thresholdsCustomized: false,
       selectedIds: new Set(safeParseJson(localStorage.getItem("fmhy_selected_ids") || "[]", [])),
       doneKeys: new Set(safeParseJson(localStorage.getItem("fmhy_done_keys") || "[]", [])),
+      doneMeta: safeParseJson(localStorage.getItem("fmhy_done_meta") || "{}", {}) || {},
+      reportFlags: safeParseJson(localStorage.getItem("fmhy_report_flags") || "{}", {}) || {},
+      recoveredItems: [],
+      reportGeneratedAt: null,
       notes: safeParseJson(localStorage.getItem("fmhy_item_notes") || "{}", {}),
       whitelistRepos: new Set(
         safeParseJson(localStorage.getItem("fmhy_wl_repos") || "[]", [])
@@ -1467,6 +1480,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         { id: "inbox_all", label: "Inbox (All Flagged)", icon: "inbox", tip: "All non-whitelisted, non-done dead, archived, dead-site, and inactive entries" },
         { id: "new_items", label: "New", icon: "inbox" },
         { id: "todo", label: "To-do", icon: "done" },
+        { id: "recovered", label: "Back Up", icon: "moved" },
         { id: "missing", label: "Dead / 404 Repos", icon: "inbox", tip: "404, DMCA 451, or disabled repositories across GitHub, GitLab, Codeberg, sr.ht, etc." },
         { id: "severe_vulns", label: "Severe Vulns (Crit/High)", icon: "vuln", tip: "Stale or archived repositories with HIGH or CRITICAL vulnerabilities (OSV.dev)" },
         { id: "archived_moved", label: "Moved / New Repo", icon: "moved", tip: "Dead or archived repositories with a detected replacement or author's similar active repo" },
@@ -1480,7 +1494,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         { id: "stores", label: "Stores", icon: "folder" },
         { id: "suspect_sites", label: "Suspect Sites", icon: "folder" },
         { id: "outbox", label: "Discord Outbox", icon: "outbox", tip: "Entries currently ticked for curated Discord report" },
-        { id: "done_pending", label: "Done / Pending", icon: "done", tip: "Items hidden locally (e.g. already reported or parked for later) without adding to whitelist.json" },
+        { id: "done_pending", label: "Reported", icon: "done" },
         { id: "whitelisted", label: "Whitelisted", icon: "junk", tip: "Globally ignored / whitelisted repositories and URLs (whitelist.json)" },
       ];
     }
@@ -1499,6 +1513,8 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     function saveLocalState() {
       localStorage.setItem("fmhy_selected_ids", JSON.stringify([...state.selectedIds]));
       localStorage.setItem("fmhy_done_keys", JSON.stringify([...state.doneKeys]));
+      localStorage.setItem("fmhy_done_meta", JSON.stringify(state.doneMeta));
+      localStorage.setItem("fmhy_report_flags", JSON.stringify(state.reportFlags));
       localStorage.setItem("fmhy_item_notes", JSON.stringify(state.notes));
       localStorage.setItem("fmhy_wl_repos", JSON.stringify([...state.whitelistRepos]));
       localStorage.setItem("fmhy_wl_urls", JSON.stringify([...state.whitelistUrls]));
@@ -1512,6 +1528,247 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         Boolean(item.origKey && state.doneKeys.has(item.origKey)) ||
         state.doneKeys.has(item.id)
       );
+    }
+
+    // ---- Reported lifecycle -------------------------------------------------
+    // doneKeys marks an item as reported; doneMeta[wlKey] snapshots its state at
+    // report time so later report loads can tell whether it recovered (Back Up),
+    // broke again after recovering (relapsed) or changed while reported.
+    // reportFlags persists relapsed/changed flags across reloads until the item
+    // is reported again or stops being flagged.
+
+    function isFlagged(it) {
+      if (it.recovered) return false;
+      if (it.kind === "site") return true;
+      return effectiveTier(it) !== "active";
+    }
+
+    function itemSig(it) {
+      if (it.kind === "site") {
+        const kinds = [...new Set((it.signals || []).map(sg => sg.kind))].sort();
+        return `site|${it.siteStatus || ""}|${kinds.join(",")}`;
+      }
+      // Inactivity tiers collapse to one state: a reported repo getting older (or the threshold
+      // inputs changing) is not a new problem; archive / 404 / replacement / vulns are.
+      const tier = effectiveTier(it);
+      return [
+        "repo",
+        tier.startsWith("tier") ? "inactive" : tier,
+        it.isArchived ? "A" : "-",
+        it.isDisabled ? "D" : "-",
+        it.replacementUrl ? "R" : "-",
+        `v${(it.vulns || []).length}`,
+      ].join("|");
+    }
+
+    function itemSigLabel(it) {
+      if (it.kind === "site") {
+        const top = topSignal(it, "inbox_all");
+        if (top) return signalKindLabel(top.kind);
+        if (it.siteStatus === "tls_error") return "TLS error";
+        const st = String(it.siteStatus || "unhealthy");
+        return st.charAt(0).toUpperCase() + st.slice(1);
+      }
+      const tier = effectiveTier(it);
+      let label;
+      if (tier === "missing") {
+        if (it.isDisabled || String(it.reason || "").toLowerCase().includes("disabled")) label = "Disabled";
+        else if (String(it.reason || "").includes("451")) label = "DMCA 451";
+        else label = "404";
+      } else if (tier === "archived") label = "Archived";
+      else if (tier === "tier3_critical") label = `Inactive ≥${state.t3}d`;
+      else if (tier === "tier2_warning") label = `Inactive ≥${state.t2}d`;
+      else if (tier === "tier1_notice") label = `Inactive ≥${state.t1}d`;
+      else label = formatStatusCell(it);
+      if (it.replacementUrl) label += " · moved";
+      return label;
+    }
+
+    function buildDoneMeta(it, reportedAt) {
+      return {
+        kind: it.kind,
+        title: it.title,
+        catLabel: it.catLabel,
+        entryId: it.entryId,
+        url: it.kind === "site" ? it.siteUrl : it.htmlUrl,
+        fullName: it.fullName,
+        sig: itemSig(it),
+        sigLabel: itemSigLabel(it),
+        reportedAt,
+        reportGeneratedAt: state.reportGeneratedAt,
+      };
+    }
+
+    function todayIso() {
+      return new Date().toISOString().slice(0, 10);
+    }
+
+    function dropDoneKeys(it) {
+      state.doneKeys.delete(it.wlKey);
+      if (it.origKey) state.doneKeys.delete(it.origKey);
+      state.doneKeys.delete(it.id);
+    }
+
+    function itemsSharingKey(it) {
+      return state.items.filter(x => x.wlKey === it.wlKey);
+    }
+
+    function markReported(it) {
+      if (it.recovered) { dismissRecovered(it); return; }
+      state.doneKeys.add(it.wlKey);
+      if (it.origKey && it.origKey !== it.wlKey) state.doneKeys.add(it.origKey);
+      state.doneMeta[it.wlKey] = buildDoneMeta(it, todayIso());
+      delete state.reportFlags[it.wlKey];
+      for (const x of itemsSharingKey(it)) { delete x.reportFlag; delete x.reportFlagFrom; }
+      state.selectedIds.delete(it.id);
+    }
+
+    function unmarkReported(it) {
+      dropDoneKeys(it);
+      delete state.doneMeta[it.wlKey];
+      if (it.origKey) delete state.doneMeta[it.origKey];
+    }
+
+    function dismissRecovered(it) {
+      const key = it.wlKey;
+      delete state.doneMeta[key];
+      state.doneKeys.delete(key);
+      for (const x of state.items) {
+        if (x.wlKey === key || x.origKey === key) dropDoneKeys(x);
+      }
+      state.selectedIds.delete(it.id);
+      state.recoveredItems = state.recoveredItems.filter(x => x.id !== it.id);
+    }
+
+    function reconcileReported(report) {
+      const genAt = report.generated_at || null;
+      const byKey = new Map();
+      const addKey = (k, it) => {
+        if (!k) return;
+        if (!byKey.has(k)) byKey.set(k, []);
+        byKey.get(k).push(it);
+      };
+      for (const it of state.items) {
+        addKey(it.wlKey, it);
+        if (it.origKey && it.origKey !== it.wlKey) addKey(it.origKey, it);
+      }
+      // Repos that errored this run are unknown, not recovered.
+      const erroredKeys = new Set();
+      for (const entry of report.entries || []) {
+        for (const rr of entry.github_repos || []) {
+          if (rr.tier !== "error") continue;
+          const k = normalizeRepoKey(rr.full_name) || String(rr.full_name || "").toLowerCase();
+          if (k) erroredKeys.add(k);
+          const ok = normalizeRepoKey(rr.requested_full_name || "");
+          if (ok) erroredKeys.add(ok);
+        }
+      }
+
+      // Adopt legacy done keys (no snapshot yet) from matching flagged items.
+      for (const it of state.items) {
+        if (!isFlagged(it) || !isDonePending(it)) continue;
+        if (state.doneMeta[it.wlKey] || (it.origKey && state.doneMeta[it.origKey])) continue;
+        state.doneMeta[it.wlKey] = buildDoneMeta(it, null);
+      }
+
+      for (const key of Object.keys(state.doneMeta)) {
+        const meta = state.doneMeta[key];
+        if (!meta || typeof meta !== "object") { delete state.doneMeta[key]; continue; }
+        const matches = byKey.get(key) || [];
+        const flagged = matches.filter(isFlagged);
+        if (flagged.length === 0) {
+          if (erroredKeys.has(key)) continue;
+          if (!meta.recoveredAt) meta.recoveredAt = genAt;
+          continue;
+        }
+        let flag = null;
+        if (meta.recoveredAt) flag = "relapsed";
+        else if (!flagged.some(x => itemSig(x) === meta.sig)) flag = "changed";
+        if (!flag) continue;
+        for (const x of matches) dropDoneKeys(x);
+        state.doneKeys.delete(key);
+        delete state.doneMeta[key];
+        const flagKey = flagged[0].wlKey;
+        state.reportFlags[flagKey] = { flag, from: meta, at: genAt };
+      }
+
+      // Apply persisted flags; drop flags whose item is no longer flagged.
+      const flaggedKeys = new Set(state.items.filter(isFlagged).map(it => it.wlKey));
+      for (const key of Object.keys(state.reportFlags)) {
+        if (!flaggedKeys.has(key)) delete state.reportFlags[key];
+      }
+      for (const it of state.items) {
+        const f = state.reportFlags[it.wlKey];
+        if (f && isFlagged(it)) {
+          it.reportFlag = f.flag;
+          it.reportFlagFrom = f.from;
+        }
+      }
+
+      buildRecoveredItems();
+      const recoveredIds = new Set(state.recoveredItems.map(x => x.id));
+      for (const id of [...state.selectedIds]) {
+        if (String(id).startsWith("recovered:") && !recoveredIds.has(id)) state.selectedIds.delete(id);
+      }
+      saveLocalState();
+    }
+
+    function buildRecoveredItems() {
+      const out = [];
+      for (const [key, meta] of Object.entries(state.doneMeta)) {
+        if (!meta || !meta.recoveredAt) continue;
+        const url = meta.url || "";
+        const catLabel = meta.catLabel || "";
+        const t = Date.parse(meta.recoveredAt);
+        out.push({
+          id: `recovered:${key}`,
+          recovered: true,
+          kind: meta.kind === "site" ? "site" : "repo",
+          wlKey: key,
+          origKey: key,
+          title: meta.title || key,
+          catLabel,
+          category: catLabel.split(" > ")[0],
+          entryId: meta.entryId || "",
+          fullName: meta.kind === "site" ? "—" : (meta.fullName || key),
+          htmlUrl: meta.kind === "site" ? "" : url,
+          siteUrl: meta.kind === "site" ? url : "",
+          url,
+          meta,
+          starred: false,
+          forge: "",
+          source: "explicit_markdown",
+          reason: "",
+          webUrls: [],
+          signals: [],
+          vulns: [],
+          inactiveDays: null,
+          replacementUrl: null,
+          sortDays: Number.isFinite(t) ? t / 86400000 : 0,
+        });
+      }
+      state.recoveredItems = out;
+    }
+
+    function findItem(id) {
+      if (id == null) return undefined;
+      return state.items.find(x => x.id === id) || state.recoveredItems.find(x => x.id === id);
+    }
+
+    function shortDate(iso) {
+      return iso ? String(iso).slice(0, 10) : "";
+    }
+
+    function reportedHistoryText(meta, flag) {
+      const parts = [meta.reportedAt ? shortDate(meta.reportedAt) : "—"];
+      if (meta.sigLabel) parts.push(`was ${meta.sigLabel}`);
+      if (flag === "relapsed") {
+        if (meta.recoveredAt) parts.push(`back up ${shortDate(meta.recoveredAt)}`);
+        parts.push("broke again");
+      } else if (flag === "changed") {
+        parts.push("now changed");
+      }
+      return parts.join(" · ");
     }
 
     function setStatus(msg) {
@@ -1774,6 +2031,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         }
       }
 
+      state.reportGeneratedAt = report.generated_at || null;
       const dt = new Date(report.generated_at).toISOString().replace("T", " ").slice(0, 16) + " UTC";
       document.getElementById("run-meta").textContent =
         `Last scan: ${dt}  |  Mode: ${report.mode}  |  Checked: ${report.summary.unique_repos_checked} repos  |  Report defaults: ${state.reportDefaults.t1}d / ${state.reportDefaults.t2}d / ${state.reportDefaults.t3}d`;
@@ -1891,6 +2149,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       }
 
       state.items = items;
+      reconcileReported(report);
       state.categories = [...cats].sort();
       renderAll();
     }
@@ -1899,14 +2158,18 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       if (folderId === "whitelisted") {
         return state.items.filter(it => isWhitelisted(it));
       }
+      if (folderId === "recovered") {
+        return state.recoveredItems.slice();
+      }
       if (folderId === "done_pending") {
-        return state.items.filter(it => !isWhitelisted(it) && isDonePending(it));
+        return state.items.filter(it => !isWhitelisted(it) && isDonePending(it) && isFlagged(it));
       }
       if (folderId === "outbox") {
-        return state.items.filter(it => state.selectedIds.has(it.id));
+        return state.items.filter(it => state.selectedIds.has(it.id))
+          .concat(state.recoveredItems.filter(it => state.selectedIds.has(it.id)));
       }
       if (folderId === "new_items") {
-        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && Boolean(it.change));
+        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && (Boolean(it.change) || Boolean(it.reportFlag)));
       }
       if (folderId === "todo") {
         return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && it.kind === "site" && it.linkCleanup);
@@ -2065,6 +2328,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
 
     function formatStatusCell(it) {
+      if (it.recovered) {
+        return it.meta && it.meta.reportedAt ? `Back up · reported ${shortDate(it.meta.reportedAt)}` : "Back up";
+      }
       if (it.kind === "site" && (SIGNAL_FOLDER_KINDS[state.activeFolder] || !DEAD_SITE_STATUSES.includes(it.siteStatus))) {
         const top = topSignal(it, state.activeFolder);
         if (top) {
@@ -2146,7 +2412,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         document.getElementById("stat-showing").textContent = `Showing: ${showingCount}`;
       }
       document.getElementById("stat-ticked").textContent = `Ticked: ${state.selectedIds.size}`;
-      document.getElementById("stat-done").textContent = `Done: ${doneCount}`;
+      document.getElementById("stat-done").textContent = `Reported: ${doneCount}`;
       document.getElementById("stat-wl").textContent = `Whitelisted: ${wlTotal}${dirtyMark}`;
       document.getElementById("wl-count").textContent = `${wlTotal} whitelisted${dirtyMark}`;
     }
@@ -2207,6 +2473,9 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         const changeBadgeHtml = it.change
           ? `<span class="chg-pill chg-${it.change === "new" ? "new" : "changed"}">${it.change === "new" ? "NEW" : "CHG"}</span>`
           : "";
+        const reportBadgeHtml = it.reportFlag === "relapsed"
+          ? `<span class="chg-pill rpt-again">AGAIN</span>`
+          : (it.reportFlag === "changed" ? `<span class="chg-pill rpt-update">UPDATE</span>` : "");
 
         let vulnBadgeHtml = "";
         if (it.vulns && it.vulns.length > 0) {
@@ -2219,7 +2488,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           <td class="col-cb"><input type="checkbox" class="row-cb" ${isTicked ? "checked" : ""} /></td>
           <td class="col-star">${it.starred ? '<span class="star-on">★</span>' : '<span class="star-off">•</span>'}</td>
           <td class="col-clip">${hasClip ? "📎" : ""}</td>
-          <td class="col-subject" title="${escapeHtml(it.title)}">${changeBadgeHtml}${sevBadgeHtml}${escapeHtml(it.title)}${vulnBadgeHtml}</td>
+          <td class="col-subject" title="${escapeHtml(it.title)}">${reportBadgeHtml}${changeBadgeHtml}${sevBadgeHtml}${escapeHtml(it.title)}${vulnBadgeHtml}</td>
           <td class="col-repo" title="${escapeHtml(it.fullName || it.siteUrl || "")}">${repoCellHtml}</td>
           <td class="col-src">${srcCellHtml}</td>
           <td class="col-web">${formatWebCell(it)}</td>
@@ -2259,7 +2528,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
 
     function renderInspector() {
-      const it = state.items.find(x => x.id === state.focusedId);
+      const it = findItem(state.focusedId);
       const noteInput = document.getElementById("card-note-input");
 
       if (!it) {
@@ -2286,9 +2555,30 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       document.getElementById("hdr-tick-btn").textContent =
         state.selectedIds.has(it.id) ? "✓ Untick" : "✓ Tick for Discord";
       document.getElementById("hdr-done-btn").textContent =
-        isDonePending(it) ? "↩ Restore to Inbox" : "📥 Done / Hide";
-      document.getElementById("hdr-wl-btn").textContent =
-        isWhitelisted(it) ? "🔥 Unwhitelist" : "🔥 Whitelist";
+        it.recovered ? "✓ Dismiss" : (isDonePending(it) ? "↩ Unreport" : "📥 Reported");
+      const wlBtn = document.getElementById("hdr-wl-btn");
+      wlBtn.style.display = it.recovered ? "none" : "";
+      wlBtn.textContent = isWhitelisted(it) ? "🔥 Unwhitelist" : "🔥 Whitelist";
+
+      if (it.recovered) {
+        const m = it.meta || {};
+        document.getElementById("card-heading").textContent = `Card for ${it.title}`;
+        document.getElementById("card-tier-pill").textContent = formatStatusCell(it);
+        let rHtml = `<div class="tb-detail-row"><strong>${it.kind === "repo" ? "Repository" : "Target URL"}:</strong> ${renderSafeLink(it.url, it.url, "", false)}</div>`;
+        rHtml += `<div class="tb-detail-row"><strong>Reported:</strong> ${escapeHtml(m.reportedAt ? shortDate(m.reportedAt) : "—")}</div>`;
+        rHtml += `<div class="tb-detail-row"><strong>Was:</strong> ${escapeHtml(m.sigLabel || "—")}</div>`;
+        rHtml += `<div class="tb-detail-row"><strong>Back Up Since:</strong> ${escapeHtml(shortDate(m.recoveredAt) || "—")}</div>`;
+        document.getElementById("card-details").innerHTML = rHtml;
+        noteInput.disabled = false;
+        noteInput.value = state.notes[it.id] || "";
+        noteInput.oninput = () => {
+          if (noteInput.value.trim()) state.notes[it.id] = noteInput.value;
+          else delete state.notes[it.id];
+          saveLocalState();
+          if (state.selectedIds.has(it.id)) renderDiscordOutbox();
+        };
+        return;
+      }
 
       document.getElementById("card-heading").textContent = `Card for ${star}${it.title}`;
       document.getElementById("card-tier-pill").textContent = formatStatusCell(it);
@@ -2342,6 +2632,11 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           const pushDateTxt = it.lastActivityAt ? ` (last push ${escapeHtml(it.lastActivityAt)})` : "";
           detailsHtml += `<div class="tb-detail-row"><strong>Last Push / Release:</strong> <strong>${escapeHtml(ageTxt)} ago</strong>${pushDateTxt}</div>`;
         }
+      }
+      if (it.reportFlag && it.reportFlagFrom) {
+        detailsHtml += `<div class="tb-detail-row"><strong>Reported:</strong> ${escapeHtml(reportedHistoryText(it.reportFlagFrom, it.reportFlag))}</div>`;
+      } else if (isDonePending(it) && state.doneMeta[it.wlKey]) {
+        detailsHtml += `<div class="tb-detail-row"><strong>Reported:</strong> ${escapeHtml(reportedHistoryText(state.doneMeta[it.wlKey], null))}</div>`;
       }
       if (it.change) {
         const chgTxt = it.change === "new" ? "New" : "Changed";
@@ -2433,11 +2728,13 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     function buildDiscordMarkdown() {
       const selected = state.items
         .filter(it => state.selectedIds.has(it.id))
+        .concat(state.recoveredItems.filter(it => state.selectedIds.has(it.id)))
         .sort((a, b) => b.sortDays - a.sortDays);
       document.getElementById("selected-count").textContent = `${selected.length} ticked`;
       if (selected.length === 0) return "";
 
       const groups = [
+        { title: "Back Up (Retract Report)", filter: it => Boolean(it.recovered), recovered: true },
         { title: "To-do: Remove Dead Links", filter: it => it.kind === "site" && it.linkCleanup, todo: true },
         { title: "Dead / 404 / DMCA Repositories", filter: it => it.kind === "repo" && effectiveTier(it) === "missing" },
         { title: "Archived Repos (New Repo Found)", filter: it => it.kind === "repo" && effectiveTier(it) === "archived" && it.replacementUrl },
@@ -2461,7 +2758,14 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
           const star = it.starred ? "⭐ " : "";
           const note = (state.notes[it.id] || "").trim();
           const noteSuffix = note ? ` — *${note}*` : "";
-          if (it.kind === "repo") {
+          if (g.recovered) {
+            const m = it.meta || {};
+            const bits = [];
+            if (m.reportedAt) bits.push(`reported ${shortDate(m.reportedAt)}`);
+            if (m.sigLabel) bits.push(`was: ${m.sigLabel}`);
+            const why = bits.length ? ` (${bits.join(", ")})` : "";
+            lines.push(`- **${it.title}** (\`${it.catLabel}\`) — <${it.url}> back up${why}${noteSuffix}`);
+          } else if (it.kind === "repo") {
             const tier = effectiveTier(it);
             const srcTag = formatSourceBadge(it.source).discordTag;
             const webPart = (it.webUrls && it.webUrls.length)
@@ -2537,38 +2841,33 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
 
     function toggleFocusedTick() {
       if (!state.focusedId) return;
-      const it = state.items.find(x => x.id === state.focusedId);
+      const it = findItem(state.focusedId);
       if (state.selectedIds.has(state.focusedId)) {
         state.selectedIds.delete(state.focusedId);
       } else {
         state.selectedIds.add(state.focusedId);
-        // Ticking an item from Done / Pending brings it back into active Outbox
-        if (it && isDonePending(it)) {
-          state.doneKeys.delete(it.wlKey);
-          if (it.origKey) state.doneKeys.delete(it.origKey);
-          state.doneKeys.delete(it.id);
-        }
+        // Ticking an item from Reported unreports it so it rejoins the active Outbox
+        if (it && !it.recovered && isDonePending(it)) unmarkReported(it);
       }
       saveLocalState();
       renderAll();
     }
 
     function toggleFocusedDonePending() {
-      const it = state.items.find(x => x.id === state.focusedId);
+      const it = findItem(state.focusedId);
       if (!it) return;
       const listBefore = filteredAndSortedItems();
       const idx = listBefore.findIndex(x => x.id === it.id);
 
-      if (isDonePending(it)) {
-        state.doneKeys.delete(it.wlKey);
-        if (it.origKey) state.doneKeys.delete(it.origKey);
-        state.doneKeys.delete(it.id);
-        setStatus(`Restored "${it.title}" back to Inbox.`);
+      if (it.recovered) {
+        dismissRecovered(it);
+        setStatus(`Dismissed "${it.title}".`);
+      } else if (isDonePending(it)) {
+        unmarkReported(it);
+        setStatus(`Unreported "${it.title}".`);
       } else {
-        state.doneKeys.add(it.wlKey);
-        if (it.origKey && it.origKey !== it.wlKey) state.doneKeys.add(it.origKey);
-        state.selectedIds.delete(it.id);
-        setStatus(`Moved "${it.title}" to Done / Pending (hidden from Inbox).`);
+        markReported(it);
+        setStatus(`Reported "${it.title}".`);
       }
       saveLocalState();
 
@@ -2582,41 +2881,52 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
     }
 
     function moveTickedToDonePending() {
-      const tickedItems = state.items.filter(it => state.selectedIds.has(it.id));
+      const tickedItems = state.items.filter(it => state.selectedIds.has(it.id))
+        .concat(state.recoveredItems.filter(it => state.selectedIds.has(it.id)));
       if (tickedItems.length === 0) {
         // If nothing is ticked, convenience-fallback to moving the currently focused row
         if (state.focusedId) {
           toggleFocusedDonePending();
         } else {
-          setStatus("No ticked items to move to Done / Pending.");
+          setStatus("Nothing ticked.");
         }
         return;
       }
+      let reported = 0;
+      let dismissed = 0;
       for (const it of tickedItems) {
-        state.doneKeys.add(it.wlKey);
-        if (it.origKey && it.origKey !== it.wlKey) state.doneKeys.add(it.origKey);
+        if (it.recovered) { dismissRecovered(it); dismissed++; }
+        else { markReported(it); reported++; }
         state.selectedIds.delete(it.id);
       }
       saveLocalState();
       renderAll();
-      setStatus(`Moved ${tickedItems.length} ticked item(s) to Done / Pending and cleared ticks.`);
+      const parts = [];
+      if (reported) parts.push(`Reported ${reported}`);
+      if (dismissed) parts.push(`dismissed ${dismissed} back up`);
+      setStatus(parts.join(", ") + ".");
     }
 
     function restoreAllDonePending() {
-      const cnt = state.doneKeys.size;
+      const cnt = state.doneKeys.size + Object.keys(state.doneMeta).length;
       if (cnt === 0) {
-        setStatus("Done / Pending folder is already empty.");
+        setStatus("Reported is empty.");
         return;
       }
+      for (const id of [...state.selectedIds]) {
+        if (String(id).startsWith("recovered:")) state.selectedIds.delete(id);
+      }
       state.doneKeys.clear();
+      state.doneMeta = {};
+      state.recoveredItems = [];
       saveLocalState();
       renderAll();
-      setStatus("Restored all items from Done / Pending back to Inbox.");
+      setStatus("Restored all reported items to Inbox.");
     }
 
     function toggleFocusedWhitelist() {
-      const it = state.items.find(x => x.id === state.focusedId);
-      if (!it) return;
+      const it = findItem(state.focusedId);
+      if (!it || it.recovered) return;
       const listBefore = filteredAndSortedItems();
       const idx = listBefore.findIndex(x => x.id === it.id);
 

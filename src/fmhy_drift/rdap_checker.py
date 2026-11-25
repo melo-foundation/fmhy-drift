@@ -361,9 +361,18 @@ def parse_rdap_domain(body: dict) -> dict[str, Any]:
     }
 
 
+TTL_FLAGGED = timedelta(hours=20)
+
+
 def _ttl_for(domain: str, data: Any) -> timedelta:
     if isinstance(data, dict) and data.get("state") == "notfound":
-        return TTL_NOTFOUND
+        return min(TTL_NOTFOUND, TTL_FLAGGED)
+    if isinstance(data, dict) and data.get("state") == "ok":
+        # Expired / held domains get renewed or released: recheck them every run instead of monthly.
+        statuses = set(data.get("statuses") or [])
+        exp = _parse_dt(data.get("expiration"))
+        if statuses & set(HOLD_STATUSES) or (exp is not None and exp < datetime.now(UTC)):
+            return TTL_FLAGGED
     jitter = int(hashlib.sha1(domain.encode()).hexdigest()[:8], 16) % TTL_JITTER_HOURS
     return TTL_BASE + timedelta(hours=jitter)
 

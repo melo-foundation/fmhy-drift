@@ -341,6 +341,65 @@ class DnsDeadChecker:
         return None
 
 
+async def resolving_urls(
+    urls: list[str],
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    timeout: float = 8.0,
+) -> set[str]:
+    """URLs whose host now resolves to a routable, non-parking address on BOTH Cloudflare and Google DoH.
+
+    Used to clear DNS-dead results reused from an earlier report. A failed or ambiguous lookup never
+    counts as recovered, so a flaky resolver cannot drop a dead site.
+    """
+    host_to_urls: dict[str, list[str]] = {}
+    for u in dict.fromkeys(urls):
+        host = (urlsplit(u).hostname or "").lower().rstrip(".")
+        if host:
+            host_to_urls.setdefault(host, []).append(u)
+    if not host_to_urls:
+        return set()
+    kwargs: dict = {
+        "timeout": httpx.Timeout(timeout),
+        "follow_redirects": True,
+        "trust_env": False,
+        "headers": {"Accept": "application/dns-json", "User-Agent": "fmhy-drift-checker/0.1"},
+    }
+    if transport is not None:
+        kwargs["transport"] = transport
+    sem = asyncio.Semaphore(20)
+    alive: set[str] = set()
+
+    async def _resolves(client: httpx.AsyncClient, endpoint: str, host: str) -> bool:
+        for qtype, rtype in (("A", 1), ("AAAA", 28)):
+            try:
+                resp = await client.get(endpoint, params={"name": host, "type": qtype})
+                data = resp.json() if resp.status_code == 200 else None
+            except Exception:
+                return False
+            if not isinstance(data, dict) or data.get("Status") != 0:
+                return False
+            answers = data.get("Answer") if isinstance(data.get("Answer"), list) else []
+            if _match_parking_cname(answers):
+                return False
+            valid, _ = _extract_valid_ips(answers, rtype)
+            if valid:
+                return True
+        return False
+
+    async with httpx.AsyncClient(**kwargs) as client:
+
+        async def _worker(host: str) -> None:
+            async with sem:
+                if await _resolves(client, CLOUDFLARE_DOH_URL, host) and await _resolves(
+                    client, GOOGLE_DOH_URL, host
+                ):
+                    alive.update(host_to_urls[host])
+
+        await asyncio.gather(*(_worker(h) for h in host_to_urls))
+    return alive
+
+
 def _parse_ct_iso(raw: str | None) -> datetime | None:
     if not raw or not isinstance(raw, str):
         return None
@@ -590,6 +649,7 @@ async def enrich_unhealthy_sites_last_active(
 
 DNS_PARKING_NAMESPACE = "dns_parking"
 DNS_PARKING_TTL = timedelta(days=6)
+DNS_PARKING_POSITIVE_TTL = timedelta(hours=20)
 
 # Nameserver host suffixes that serve ONLY parking / for-sale landers. Each entry was resolved via DoH on
 # 2026-11-25 and appears in passive-DNS history (dns.coffee) on parked domains. Deliberately excluded:
@@ -799,7 +859,13 @@ async def check_dns_parking(
         return True, records, detail if detail2 is not None else None
 
     def _from_cache(key: str) -> tuple[bool, str | None]:
-        row = cache.get(DNS_PARKING_NAMESPACE, key, ttl=DNS_PARKING_TTL)
+        row = cache.get(
+            DNS_PARKING_NAMESPACE,
+            key,
+            ttl=DNS_PARKING_TTL,
+            positive_ttl=DNS_PARKING_POSITIVE_TTL,
+            is_positive=lambda d: isinstance(d, dict) and bool(d.get("parked")),
+        )
         if isinstance(row, dict):
             stats["cached"] += 1
             return True, row.get("parked")

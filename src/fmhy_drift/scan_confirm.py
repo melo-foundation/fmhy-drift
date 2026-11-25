@@ -35,6 +35,7 @@ CLOUDFLARE_BASE = "https://api.cloudflare.com/client/v4"
 CACHE_NS = "scan_confirm"
 CACHE_TTL = timedelta(days=7)
 INCONCLUSIVE_TTL = timedelta(days=1)
+DOWN_TTL = timedelta(days=2)
 
 URLSCAN_MIN_INTERVAL = 2.0  # seconds between urlscan submissions (raised from the per-minute quota)
 CLOUDFLARE_MIN_INTERVAL = 10.0  # Free / self-serve plans: 1 scan per 10 seconds
@@ -499,7 +500,8 @@ def _cached(cache: SignalCache, url: str, now: datetime) -> list[SiteSignal] | N
     if not hit or not isinstance(hit[0], dict):
         return None
     data, checked = hit
-    ttl = INCONCLUSIVE_TTL if data.get("outcome") == "inconclusive" else CACHE_TTL
+    outcome = data.get("outcome")
+    ttl = INCONCLUSIVE_TTL if outcome == "inconclusive" else DOWN_TTL if outcome == "down" else CACHE_TTL
     if now - checked > ttl:
         return None
     return _signals_of(data)

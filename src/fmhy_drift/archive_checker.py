@@ -37,6 +37,7 @@ CC_COLLINFO_URL = "https://index.commoncrawl.org/collinfo.json"
 
 ARCHIVE_NAMESPACE = "archive"
 ARCHIVE_TTL = timedelta(days=28)
+ARCHIVE_POSITIVE_TTL = timedelta(days=7)  # new captures take days to appear; recheck flagged origins weekly
 CC_COLLINFO_TTL = timedelta(days=3)
 
 CDX_INTERVAL_S = 4.0
@@ -449,7 +450,13 @@ async def check_archives(
     try:
         async with make_client(transport, timeout=30.0, follow_redirects=False) as client:
             for host in order:
-                cached = cache.get(ARCHIVE_NAMESPACE, host, ttl=ARCHIVE_TTL)
+                cached = cache.get(
+                    ARCHIVE_NAMESPACE,
+                    host,
+                    ttl=ARCHIVE_TTL,
+                    positive_ttl=ARCHIVE_POSITIVE_TTL,
+                    is_positive=lambda d: isinstance(d, dict) and bool(d.get("kind")),
+                )
                 if isinstance(cached, dict):
                     verdicts[host] = cached
                     stats["cached"] += 1
