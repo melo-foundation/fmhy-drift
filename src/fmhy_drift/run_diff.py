@@ -142,3 +142,37 @@ def annotate_changes(current: dict[str, Any], previous: dict[str, Any] | None) -
         "resolved": resolved_repos + resolved_sites,
     }
     return current
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m fmhy_drift.run_diff CURRENT.json CANDIDATE_PREVIOUS.json`.
+
+    Annotates CURRENT in place when CANDIDATE is strictly older. Exit 0 = annotated,
+    1 = candidate not older (try an earlier run), 2 = unreadable input.
+    """
+    import json
+    import sys
+    from pathlib import Path
+
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 2:
+        print("usage: python -m fmhy_drift.run_diff CURRENT.json PREVIOUS.json", file=sys.stderr)
+        return 2
+    cur_path, prev_path = Path(args[0]), Path(args[1])
+    try:
+        cur = json.loads(cur_path.read_text(encoding="utf-8"))
+        prev = json.loads(prev_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"run_diff: {exc}", file=sys.stderr)
+        return 2
+    if str(prev.get("generated_at") or "") >= str(cur.get("generated_at") or ""):
+        return 1
+    out = annotate_changes(cur, prev)
+    cur_path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    ch = out["changes"]
+    print(f"Changes since {ch['previous_generated_at']}: {ch['new']} new, {ch['changed']} changed, {ch['resolved']} resolved")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
