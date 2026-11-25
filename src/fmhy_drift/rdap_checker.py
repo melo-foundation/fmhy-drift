@@ -537,12 +537,19 @@ def build_signals(
         # RDAP "last changed" is the best available date for when the hold was applied.
         since = f" since {last_changed.date().isoformat()}" if last_changed else ""
         until = f"; paid until {exp.date().isoformat()}" if exp else ""
+        raw_holds = {s for s in statuses if s in HOLD_STATUSES}
+        if raw_holds == {"clienthold"}:
+            who = "suspended by registrar"
+        elif raw_holds == {"serverhold"}:
+            who = "suspended by registry"
+        else:
+            who = "suspended by registrar and registry"
         out.append(
             SiteSignal(
                 kind=SignalKind.DOMAIN_HELD,
                 severity="warning",
                 source="rdap",
-                detail=f"status {', '.join(holds)}{since}{until}",
+                detail=f"{who}, likely DMCA / abuse takedown; status {', '.join(holds)}{since}{until}",
                 observed_at=last_changed or checked_at,
                 evidence_url=evidence,
             )

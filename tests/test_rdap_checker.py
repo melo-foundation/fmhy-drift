@@ -634,7 +634,10 @@ def test_hold_on_unexpired_domain_is_held_not_expired() -> None:
     }
     sigs = build_signals("voir-anime.to", data, checked_at=NOW, listed_since=None)
     assert [s.kind for s in sigs] == [SignalKind.DOMAIN_HELD]
-    assert sigs[0].detail == "status client hold since 2026-11-12; paid until 2028-03-31"
+    assert sigs[0].detail == (
+        "suspended by registrar, likely DMCA / abuse takedown; "
+        "status client hold since 2026-11-12; paid until 2028-03-31"
+    )
     assert sigs[0].observed_at == datetime(2026, 11, 12, 14, 13, 10, tzinfo=UTC)
 
 
