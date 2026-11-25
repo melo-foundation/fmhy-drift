@@ -213,6 +213,11 @@ class SiteCheckResult:
     signals: list[SiteSignal] = field(default_factory=list)
     # Other links on the same FMHY line that are not dead / parked / TLS-broken (set per run by the CLI).
     alive_siblings: list[str] = field(default_factory=list)
+    # Outage tracking for down-type results (set per run by `hold.apply_hold`).
+    down_since: datetime | None = None
+    down_since_source: str = ""
+    down_days: int | None = None
+    held: bool = False
 
     @property
     def signal_kinds(self) -> set[SignalKind]:
@@ -224,7 +229,7 @@ class SiteCheckResult:
 
         Active threats (malicious, re-registered, drop-caught) stay in their own categories.
         """
-        if not self.alive_siblings or not self.is_unhealthy:
+        if self.held or not self.alive_siblings or not self.is_unhealthy:
             return False
         return not (self.signal_kinds & LINK_CLEANUP_EXCLUDED_KINDS)
 
@@ -398,3 +403,4 @@ class DriftReport:
     unique_repos_checked: int
     whitelisted_repos_skipped: int = 0
     whitelisted_sites_skipped: int = 0
+    hold_days: int = 30

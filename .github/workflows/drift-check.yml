@@ -124,7 +124,9 @@ jobs:
         if: steps.check_ui_only.outputs.ui_only != 'true'
         uses: actions/cache/restore@v4
         with:
-          path: .cache/signal-cache.json
+          path: |
+            .cache/signal-cache.json
+            .cache/flag-history.json
           key: signal-cache-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             signal-cache-
@@ -144,6 +146,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CERTSPOTTER_API_KEY: ${{ secrets.CERTSPOTTER_API_KEY }}
           # Empty = CLI default (30 min full run, 5 min incremental --only-alt-forges run).
+          HOLD_DAYS: ${{ vars.HOLD_DAYS || '30' }}
           SIGNAL_BUDGET_MINUTES: ${{ vars.SIGNAL_BUDGET_MINUTES || '' }}
           STORE_WARN_DAYS_1: ${{ vars.STORE_WARN_DAYS_1 || '365' }}
           STORE_WARN_DAYS_2: ${{ vars.STORE_WARN_DAYS_2 || '730' }}
@@ -196,7 +199,9 @@ jobs:
         if: always() && steps.check_ui_only.outputs.ui_only != 'true'
         uses: actions/cache/save@v4
         with:
-          path: .cache/signal-cache.json
+          path: |
+            .cache/signal-cache.json
+            .cache/flag-history.json
           key: signal-cache-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload Markdown and JSON drift reports

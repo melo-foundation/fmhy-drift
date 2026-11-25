@@ -40,6 +40,7 @@ from fmhy_drift.proxy_guard import (
     validate_proxy_url,
     verify_proxy_egress,
 )
+from fmhy_drift.hold import apply_hold
 from fmhy_drift.run_diff import annotate_changes
 from fmhy_drift.reporter import (
     github_pages_url_from_env,
@@ -196,6 +197,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=_env_int("STORE_WARN_DAYS_3", 1095),
         help="Store/registry listing critical threshold in days since last update (default: 1095).",
+    )
+    parser.add_argument(
+        "--hold-days",
+        type=int,
+        default=_env_int("HOLD_DAYS", 30),
+        help="Broken sites stay in the Holding folder until down this many days (default: 30).",
     )
     parser.add_argument(
         "--site-signals",
@@ -676,6 +683,18 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
                 print(f"Warning: could not save signal cache {args.signal_cache}: {exc}", file=sys.stderr)
 
     site_results_map = _attach_alive_siblings(entries, site_results_map)
+    if site_results_map and args.signal_cache is not None:
+        history_path = args.signal_cache.with_name("flag-history.json")
+        history = SignalCache(history_path, now=datetime.now(UTC))
+        site_results_map = apply_hold(
+            site_results_map, history=history, now=datetime.now(UTC), hold_days=args.hold_days
+        )
+        try:
+            history.save()
+        except OSError as exc:
+            print(f"Warning: could not save {history_path}: {exc}", file=sys.stderr)
+        held = sum(1 for sr in site_results_map.values() if sr.held)
+        print(f"Holding {held} broken site URL(s) down < {args.hold_days}d.", flush=True)
 
     # 4. Merge explicit FMHY repo refs + homepage auto-discovered refs, excluding whitelisted repos
     entry_all_refs: list[list[GitHubRef]] = []
@@ -830,6 +849,7 @@ async def run_drift_pipeline(args: argparse.Namespace) -> int:
         unique_repos_checked=unique_repo_count,
         whitelisted_repos_skipped=len(whitelisted_repo_keys_seen),
         whitelisted_sites_skipped=whitelisted_sites_skipped,
+        hold_days=args.hold_days,
     )
 
     pages_url = github_pages_url_from_env()

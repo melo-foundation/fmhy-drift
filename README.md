@@ -17,6 +17,7 @@ Runs weekly on Mondays (`06:00 UTC`), on code pushes to `main`, and via `workflo
 | `DISCORD_WEBHOOK_URL` | Secret | Optional automatic summary ping on run completion. |
 | `WARN_DAYS_1` / `2` / `3` | Variable | Inactivity thresholds in days (defaults: `90`, `180`, `365`). |
 | `STORE_WARN_DAYS_1` / `2` / `3` | Variable | Store / registry listing age thresholds in days (defaults: `365`, `730`, `1095`). |
+| `HOLD_DAYS` | Variable | Days a broken site stays in Holding before it shows in Inbox (default: `30`). |
 | `SIGNAL_BUDGET_MINUTES` | Variable | Site-signal time budget (default: `30`; `5` for incremental `only_alt_forges` runs). |
 
 ### Site-signal secrets
@@ -40,6 +41,11 @@ The workflow keeps `.cache/signal-cache.json` in the Actions cache. Delete the `
 
 | Folder | URL | Contents |
 | :--- | :--- | :--- |
+| New | `/new/` | rows new or changed since the previous published report |
+| To-do | `/todo/` | dead links on FMHY lines with other working links |
+| Back Up | `/recovered/` | reported items no longer flagged |
+| Holding | `/holding/` | broken sites down fewer than `HOLD_DAYS` days |
+| Reported | `/reported/` | items you marked reported (stored in your browser) |
 | Dead / Parked Sites | `/dead-sites/` | `dead`, `parked`, `tls_error` sites |
 | Malicious | `/malicious/` | `malicious` |
 | Hijack Risk | `/hijack-risk/` | `reregistered`, `dropcatch_registrar`, `domain_expired`, `domain_held` |
@@ -60,6 +66,7 @@ GITHUB_TOKEN="ghp_..." uv run fmhy-drift --skip-without-proxy --signal-budget-mi
 | `--site-signals` / `--no-site-signals` | `SITE_SIGNALS` | on (ignored with `--github-only`) |
 | `--signal-cache PATH` | | `.cache/signal-cache.json` |
 | `--signal-budget-minutes N` | `SIGNAL_BUDGET_MINUTES` | `30`; `5` with `--only-alt-forges` |
+| `--hold-days N` | `HOLD_DAYS` | `30` |
 | `--store-warn-days-1` / `-2` / `-3` | `STORE_WARN_DAYS_1` / `2` / `3` | `365` / `730` / `1095` |
 
 Site-signal API keys are read from the environment variables named in the secrets table above.

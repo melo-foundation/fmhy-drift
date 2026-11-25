@@ -9,6 +9,7 @@ FOLDER_ROUTE_SLUGS: tuple[str, ...] = (
     "new",
     "todo",
     "recovered",
+    "holding",
     "dead-repos",
     "severe-vulns",
     "moved",
@@ -1234,6 +1235,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       new_items: "new",
       todo: "todo",
       recovered: "recovered",
+      holding: "holding",
       missing: "dead-repos",
       severe_vulns: "severe-vulns",
       archived_moved: "moved",
@@ -1258,6 +1260,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       new_items: "new_items",
       todo: "todo",
       recovered: "recovered",
+      holding: "holding",
       "dead-repos": "missing",
       missing: "missing",
       "severe-vulns": "severe_vulns",
@@ -1481,6 +1484,7 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         { id: "new_items", label: "New", icon: "inbox" },
         { id: "todo", label: "To-do", icon: "done" },
         { id: "recovered", label: "Back Up", icon: "moved" },
+        { id: "holding", label: `Holding <${state.holdDays || 30}d`, icon: "folder" },
         { id: "missing", label: "Dead / 404 Repos", icon: "inbox", tip: "404, DMCA 451, or disabled repositories across GitHub, GitLab, Codeberg, sr.ht, etc." },
         { id: "severe_vulns", label: "Severe Vulns (Crit/High)", icon: "vuln", tip: "Stale or archived repositories with HIGH or CRITICAL vulnerabilities (OSV.dev)" },
         { id: "archived_moved", label: "Moved / New Repo", icon: "moved", tip: "Dead or archived repositories with a detected replacement or author's similar active repo" },
@@ -2144,10 +2148,15 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
             changeFrom: sr.change_from || null,
             aliveSiblings: Array.isArray(sr.alive_siblings) ? sr.alive_siblings : [],
             linkCleanup: Boolean(sr.link_cleanup),
+            held: Boolean(sr.held),
+            downSince: sr.down_since ? String(sr.down_since).slice(0, 10) : null,
+            downDays: sr.down_days != null ? sr.down_days : null,
+            downSource: sr.down_since_source || "",
           });
         }
       }
 
+      state.holdDays = Number(report.hold_days) || 30;
       state.items = items;
       reconcileReported(report);
       state.categories = [...cats].sort();
@@ -2168,17 +2177,20 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         return state.items.filter(it => state.selectedIds.has(it.id))
           .concat(state.recoveredItems.filter(it => state.selectedIds.has(it.id)));
       }
+      if (folderId === "holding") {
+        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && it.held);
+      }
       if (folderId === "new_items") {
-        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && (Boolean(it.change) || Boolean(it.reportFlag)));
+        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && !it.held && (Boolean(it.change) || Boolean(it.reportFlag)));
       }
       if (folderId === "todo") {
-        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && it.kind === "site" && it.linkCleanup);
+        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && !it.held && it.kind === "site" && it.linkCleanup);
       }
       if (folderId === "inbox_all") {
-        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && effectiveTier(it) !== "active");
+        return state.items.filter(it => !isWhitelisted(it) && !isDonePending(it) && !it.held && effectiveTier(it) !== "active");
       }
       return state.items.filter(it => {
-        if (isWhitelisted(it) || isDonePending(it)) return false;
+        if (isWhitelisted(it) || isDonePending(it) || it.held) return false;
         const tier = effectiveTier(it);
         if (folderId === "severe_vulns") return it.kind === "repo" && tier !== "active" && it.vulns && it.vulns.length > 0;
         if (folderId === "archived_moved") return it.kind === "repo" && (tier === "archived" || tier === "missing") && Boolean(it.replacementUrl);
@@ -2327,7 +2339,18 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
       });
     }
 
+    function addDaysIso(isoDay, days) {
+      const d = new Date(isoDay + "T00:00:00Z");
+      if (isNaN(d.getTime())) return "";
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0, 10);
+    }
+
     function formatStatusCell(it) {
+      if (it.held) {
+        const until = it.downSince ? addDaysIso(it.downSince, state.holdDays || 30) : "";
+        return `Down ${it.downDays != null ? it.downDays + "d" : "?"} · held${until ? " until " + until : ""}`;
+      }
       if (it.recovered) {
         return it.meta && it.meta.reportedAt ? `Back up · reported ${shortDate(it.meta.reportedAt)}` : "Back up";
       }
@@ -2642,6 +2665,11 @@ TRIAGE_HTML = r"""<!DOCTYPE html>
         const chgTxt = it.change === "new" ? "New" : "Changed";
         const fromTxt = it.changeFrom ? ` · was ${it.changeFrom}` : "";
         detailsHtml += `<div class="tb-detail-row"><strong>This Run:</strong> ${escapeHtml(chgTxt + fromTxt)}</div>`;
+      }
+      if (it.kind === "site" && it.downSince) {
+        const srcTxt = it.downSource ? ` (${it.downSource})` : "";
+        const daysTxt = it.downDays != null ? ` · ${it.downDays}d` : "";
+        detailsHtml += `<div class="tb-detail-row"><strong>Down Since:</strong> ${escapeHtml(it.downSince + srcTxt + daysTxt)}</div>`;
       }
       if (it.kind === "site" && it.aliveSiblings && it.aliveSiblings.length) {
         const upLinks = it.aliveSiblings.map(u => renderSafeLink(u, u, "", false)).join("<br/>");

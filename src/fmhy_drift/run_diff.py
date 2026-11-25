@@ -43,11 +43,13 @@ def _site_state(sr: dict) -> tuple:
         for s in sr.get("signals") or []
         if isinstance(s, dict) and s.get("kind")
     )
-    return (sr.get("status"), tuple(sigs))
+    return (sr.get("status"), tuple(sigs), bool(sr.get("held")))
 
 
 def _site_state_label(state: tuple) -> str:
-    status, sigs = state
+    status, sigs = state[0], state[1]
+    if len(state) > 2 and state[2]:
+        return "holding"
     kinds = ", ".join(k for k, _ in sigs)
     return f"{status}: {kinds}" if kinds else str(status)
 
@@ -64,6 +66,9 @@ _FLAGGED_SITE_STATUSES = {"dead", "parked", "tls_error", "flagged"}
 
 
 def _is_flagged_site(state: tuple) -> bool:
+    """Flagged and visible: held sites are tracked but not shown, so leaving the hold reads as new."""
+    if len(state) > 2 and state[2]:
+        return False
     return state[0] in _FLAGGED_SITE_STATUSES or bool(state[1])
 
 

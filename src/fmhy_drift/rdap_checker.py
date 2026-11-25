@@ -361,14 +361,15 @@ def parse_rdap_domain(body: dict) -> dict[str, Any]:
     }
 
 
-TTL_FLAGGED = timedelta(hours=20)
+# Expired / held / deleted domains: rechecked weekly (vs ~monthly for clean ones) so a renewal or release
+# is seen well inside the 30-day hold before a broken site is reported.
+TTL_FLAGGED = timedelta(days=6)
 
 
 def _ttl_for(domain: str, data: Any) -> timedelta:
     if isinstance(data, dict) and data.get("state") == "notfound":
         return min(TTL_NOTFOUND, TTL_FLAGGED)
     if isinstance(data, dict) and data.get("state") == "ok":
-        # Expired / held domains get renewed or released: recheck them every run instead of monthly.
         statuses = set(data.get("statuses") or [])
         exp = _parse_dt(data.get("expiration"))
         if statuses & set(HOLD_STATUSES) or (exp is not None and exp < datetime.now(UTC)):

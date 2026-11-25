@@ -35,7 +35,7 @@ CLOUDFLARE_BASE = "https://api.cloudflare.com/client/v4"
 CACHE_NS = "scan_confirm"
 CACHE_TTL = timedelta(days=7)
 INCONCLUSIVE_TTL = timedelta(days=1)
-DOWN_TTL = timedelta(days=2)
+DOWN_TTL = CACHE_TTL
 
 URLSCAN_MIN_INTERVAL = 2.0  # seconds between urlscan submissions (raised from the per-minute quota)
 CLOUDFLARE_MIN_INTERVAL = 10.0  # Free / self-serve plans: 1 scan per 10 seconds

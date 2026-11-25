@@ -483,6 +483,17 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
         lines.append(f"- {_entry_location(item)}")
         lines.append(f"  - remove <{sr.url}> — {sr.reason} | still up: {still_up}")
 
+    # Section 5c: broken sites still inside the hold window
+    held_rows = [(item, sr) for item in report.entries for sr in item.site_results if sr.held]
+    lines.extend(["", f"## 5c. ⏳ Holding (Down < {report.hold_days}d)", ""])
+    if not held_rows:
+        lines.append("_None._")
+    for item, sr in sorted(held_rows, key=lambda r: -(r[1].down_days or 0)):
+        since = sr.down_since.strftime("%Y-%m-%d") if sr.down_since else "?"
+        lines.append(
+            f"- {_entry_location(item)} — <{sr.url}> down {sr.down_days}d (since {since}, {sr.down_since_source})"
+        )
+
     # Section 6: Dead / Parked / TLS Error sites
     lines.extend(["", "## 6. 🌐 Unhealthy Sites (Dead, Parked, or TLS Error)", ""])
     if pv is None and not dns_only_sites:
@@ -490,7 +501,9 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
             "_Skipped in GitHub-only mode (configure `PROXY_URL` or `--dns-check` to enable site checks)._"
         )
     else:
-        unhealthy_entries = [e for e in report.entries if e.any_site_unhealthy]
+        unhealthy_entries = [
+            e for e in report.entries if any(sr.is_unhealthy and not sr.held for sr in e.site_results)
+        ]
         if not unhealthy_entries:
             lines.append("_No dead, parked, or TLS-broken sites detected._")
         else:
@@ -502,7 +515,7 @@ def render_markdown_report(report: DriftReport, *, pages_url: str | None = None)
                 )
                 lines.append(f"- {badge}{_entry_location(item)}")
                 for sr in item.site_results:
-                    if sr.is_unhealthy:
+                    if sr.is_unhealthy and not sr.held:
                         lines.append(f"  - `{sr.status.value}`: <{sr.url}> — {sr.reason}")
 
     # Sections 7-10: passive site signals
@@ -568,6 +581,8 @@ def _collect_signal_entries(
     for item in entries:
         rows: list[tuple[SiteCheckResult, list[SiteSignal]]] = []
         for sr in item.site_results:
+            if sr.held:
+                continue
             sigs = sorted((s for s in sr.signals if s.kind in kinds), key=_signal_sort_key, reverse=True)
             if sigs:
                 rows.append((sr, sigs))
@@ -612,6 +627,7 @@ def render_json_report(report: DriftReport) -> str:
     )
     payload = {
         "generated_at": report.generated_at.isoformat(),
+        "hold_days": report.hold_days,
         "mode": mode_str,
         "index_source": report.index_source,
         "thresholds": {
@@ -653,6 +669,10 @@ def render_json_report(report: DriftReport) -> str:
                         "reason": sr.reason,
                         "signals": [sig.to_json() for sig in sr.signals],
                         "alive_siblings": list(sr.alive_siblings),
+                        "down_since": sr.down_since.isoformat() if sr.down_since else None,
+                        "down_since_source": sr.down_since_source or None,
+                        "down_days": sr.down_days,
+                        "held": sr.held,
                         "link_cleanup": sr.is_link_cleanup,
                     }
                     for sr in item.site_results

@@ -46,7 +46,7 @@ from fmhy_drift.signal_cache import SignalCache
 
 CACHE_NS = "storefront"
 CACHE_TTL = timedelta(days=6)
-POSITIVE_TTL = timedelta(hours=20)  # removed / stale listings are rechecked every daily-or-slower run
+POSITIVE_TTL = timedelta(days=6)  # matches CACHE_TTL: broken sites are held 30 days, a weekly recheck catches recovery
 
 API_UA = "fmhy-drift-checker/0.1"
 # Google Play / Chrome Web Store / F-Droid serve reduced or bot pages to unknown agents.

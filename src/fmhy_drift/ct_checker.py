@@ -33,7 +33,7 @@ CRTSH_URL = "https://crt.sh/"
 
 CT_NAMESPACE = "ct"
 CT_TTL = timedelta(days=14)
-CT_POSITIVE_TTL = timedelta(days=3)
+CT_POSITIVE_TTL = timedelta(days=7)
 
 SHORT_LIVED_MAX_DAYS = 100  # LE / ZeroSSL / GTS 90-day style (and shorter)
 MIN_SHORT_ISSUANCES = 3

@@ -409,13 +409,13 @@ def test_check_rdap_end_to_end_never_contacts_listed_hosts() -> None:
     assert contacted == []
     assert out2.keys() == out.keys()
 
-    # A day later only the flagged (deleted) domain is rechecked; clean domains stay cached for weeks.
+    # A week later only the flagged (deleted) domain is rechecked; clean domains stay cached for weeks.
     contacted.clear()
     asyncio.run(
         check_rdap(
             urls,
             cache=cache,
-            now=NOW + timedelta(days=1),
+            now=NOW + timedelta(days=7),
             listed_since=listed,
             transport=httpx.MockTransport(_make_handler(contacted, responses)),
         )

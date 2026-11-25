@@ -649,7 +649,7 @@ async def enrich_unhealthy_sites_last_active(
 
 DNS_PARKING_NAMESPACE = "dns_parking"
 DNS_PARKING_TTL = timedelta(days=6)
-DNS_PARKING_POSITIVE_TTL = timedelta(hours=20)
+DNS_PARKING_POSITIVE_TTL = timedelta(days=6)
 
 # Nameserver host suffixes that serve ONLY parking / for-sale landers. Each entry was resolved via DoH on
 # 2026-11-25 and appears in passive-DNS history (dns.coffee) on parked domains. Deliberately excluded:
